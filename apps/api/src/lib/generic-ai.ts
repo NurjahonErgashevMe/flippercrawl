@@ -4,10 +4,10 @@ import { createOllama } from "ollama-ai-provider";
 import { anthropic } from "@ai-sdk/anthropic";
 import { groq } from "@ai-sdk/groq";
 import { google } from "@ai-sdk/google";
-import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { fireworks } from "@ai-sdk/fireworks";
 import { deepinfra } from "@ai-sdk/deepinfra";
 import { createVertex } from "@ai-sdk/google-vertex";
+import { withOpenRouterProviderRouting } from "./openrouter-provider-fetch";
 
 type Provider =
   | "openai"
@@ -19,7 +19,11 @@ type Provider =
   | "fireworks"
   | "deepinfra"
   | "vertex";
-const defaultProvider: Provider = config.OLLAMA_BASE_URL ? "ollama" : "openai";
+const defaultProvider: Provider = config.OLLAMA_BASE_URL
+  ? "ollama"
+  : config.OPENROUTER_API_KEY
+    ? "openrouter"
+    : "openai";
 
 const providerList: Record<Provider, any> = {
   openai: createOpenAI({
@@ -32,8 +36,12 @@ const providerList: Record<Provider, any> = {
   anthropic, //ANTHROPIC_API_KEY
   groq, //GROQ_API_KEY
   google, //GOOGLE_GENERATIVE_AI_API_KEY
-  openrouter: createOpenRouter({
+  // OpenRouter: OpenAI-compatible API, модели v2 (ai@6). Пакет @openrouter/ai-sdk-provider отдаёт v1.
+  openrouter: createOpenAI({
     apiKey: config.OPENROUTER_API_KEY,
+    baseURL: config.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1",
+    name: "openrouter",
+    fetch: withOpenRouterProviderRouting(globalThis.fetch.bind(globalThis)),
   }),
   fireworks, //FIREWORKS_API_KEY
   deepinfra, //DEEPINFRA_API_KEY
@@ -61,6 +69,10 @@ export function getModel(name: string, provider: Provider = defaultProvider) {
   // o3-mini returns empty text via the Responses API — force Chat Completions
   if (provider === "openai" && modelName.startsWith("o3-mini")) {
     return providerList.openai.chat(modelName);
+  }
+  // OpenRouter: только Chat Completions (OpenAI-compatible), не Responses API
+  if (provider === "openrouter") {
+    return providerList.openrouter.chat(modelName);
   }
   return providerList[provider](modelName);
 }

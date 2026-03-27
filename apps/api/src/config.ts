@@ -45,6 +45,8 @@ const configSchema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_BASE_URL: z.string().optional(),
   OPENROUTER_API_KEY: z.string().optional(),
+  /** OpenAI-compatible API base (OpenRouter). AI SDK 6 требует v2 — используем @ai-sdk/openai + этот URL, не пакет @openrouter/ai-sdk-provider (v1). */
+  OPENROUTER_BASE_URL: z.string().optional(),
   LLAMAPARSE_API_KEY: z.string().optional(),
   STRIPE_SECRET_KEY: z.string().optional(),
   AUTUMN_SECRET_KEY: z.string().optional(),
@@ -146,6 +148,26 @@ const configSchema = z.object({
   PROXY_SERVER: z.string().optional(),
   PROXY_USERNAME: z.string().optional(),
   PROXY_PASSWORD: z.string().optional(),
+  /** GET URL провайдера для смены IP мобильного прокси (после 403/429 и т.п.) */
+  PROXY_ROTATION_URL: z.string().optional(),
+  /** Коды ответа, при которых вызывается смена IP и повтор запроса (через запятую) */
+  PROXY_ROTATION_STATUSES: z.string().default("403,429"),
+  /** Максимум попыток одного запроса (первая + повторы после ротации) */
+  PROXY_ROTATION_MAX_ATTEMPTS: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(20)
+    .default(5),
+  /** Мин. интервал между вызовами API смены IP (мс), чтобы не ддосить провайдера */
+  PROXY_ROTATION_COOLDOWN_MS: z.coerce.number().int().min(0).default(2500),
+  /** Пауза после смены IP перед повтором запроса (мс) */
+  PROXY_ROTATION_POST_DELAY_MS: z.coerce.number().int().min(0).default(1500),
+  /** При обрыве соединения с прокси вызывать PROXY_ROTATION_URL (если задан) */
+  PROXY_ROTATION_ON_TRANSPORT_ERROR: z.stringbool().optional().default(true),
+
+  /** Только эндпоинты scrape (и batch/status); остальные API — 404 */
+  API_SCRAPE_ONLY: z.stringbool().optional().default(false),
 
   // External Services
   PLAYWRIGHT_MICROSERVICE_URL: z.string().optional(),

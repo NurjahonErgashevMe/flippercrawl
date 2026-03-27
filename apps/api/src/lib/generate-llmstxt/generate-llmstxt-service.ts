@@ -184,7 +184,7 @@ export async function performGenerateLlmsTxt(
 
             const { extract } = await generateCompletions({
               logger,
-              model: getModel("gpt-4o-mini", "openai"),
+              model: getModel("gpt-4o-mini"),
               options: {
                 systemPrompt: "",
                 schema: descriptionSchema,
@@ -267,7 +267,14 @@ export async function performGenerateLlmsTxt(
     });
 
     // Bill team for usage
-    billTeam(teamId, subId, urls.length, apiKeyId, { endpoint: "llms_txt", jobId: generationId }, logger).catch(error => {
+    billTeam(
+      teamId,
+      subId,
+      urls.length,
+      apiKeyId,
+      { endpoint: "llms_txt", jobId: generationId },
+      logger,
+    ).catch(error => {
       logger.error(`Failed to bill team ${teamId} for ${urls.length} urls`, {
         teamId,
         count: urls.length,

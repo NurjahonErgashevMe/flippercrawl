@@ -18,7 +18,7 @@ export async function generateBasicCompletion(
 ): Promise<{ text: string } | null> {
   try {
     const result = await generateText({
-      model: getModel("gpt-4.1", "openai"),
+      model: getModel("gpt-4.1"),
       prompt: prompt,
       providerOptions: {
         anthropic: {
@@ -69,7 +69,7 @@ export async function generateBasicCompletion(
     if (error?.type == "rate_limit_error") {
       try {
         const result = await generateText({
-          model: getModel("gpt-4o-mini", "openai"),
+          model: getModel("gpt-4o-mini"),
           prompt: prompt,
           providerOptions: {
             anthropic: {

@@ -65,7 +65,7 @@ async function evaluateURL(
 
   // Use GPT-4o-mini to evaluate if the scrape was actually successful
   const evaluationResult = await generateObject({
-    model: getModel("gpt-4o-mini", "openai"),
+    model: getModel("gpt-4o-mini"),
     schema: z.object({
       is_successful: z.boolean(),
     }),

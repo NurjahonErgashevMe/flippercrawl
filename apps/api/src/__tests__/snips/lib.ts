@@ -22,7 +22,11 @@ export const TEST_SELF_HOST = !!config.TEST_SUITE_SELF_HOSTED;
 export const TEST_PRODUCTION = !TEST_SELF_HOST;
 
 // TODO: do we want to run AI tests when users run this command locally? It may lead to increased spending for them, depending on configuration
-export const HAS_AI = !!(config.OPENAI_API_KEY || config.OLLAMA_BASE_URL);
+export const HAS_AI = !!(
+  config.OPENAI_API_KEY ||
+  config.OLLAMA_BASE_URL ||
+  config.OPENROUTER_API_KEY
+);
 export const HAS_FIRE_ENGINE = !!config.FIRE_ENGINE_BETA_URL;
 export const HAS_PLAYWRIGHT = !!config.PLAYWRIGHT_MICROSERVICE_URL;
 export const HAS_PROXY = !!config.PROXY_SERVER;

@@ -13,6 +13,7 @@ import { v7 as uuid } from "uuid";
 import * as undici from "undici";
 import { getSecureDispatcher } from "./safeFetch";
 import { logger } from "../../../../lib/logger";
+import { executeFetchWithProxyRotation } from "../../../../lib/proxyRotation";
 
 const mapUndiciError = (url: string, skipTlsVerification: boolean, e: any) => {
   const code = e?.code ?? e?.cause?.code ?? e?.errno ?? e?.name;
@@ -65,11 +66,15 @@ export async function fetchFileToBuffer(
   buffer: Buffer;
 }> {
   try {
-    const response = await undici.fetch(url, {
-      ...init,
-      redirect: "follow",
-      dispatcher: getSecureDispatcher(skipTlsVerification),
-    });
+    const response = await executeFetchWithProxyRotation(
+      logger.child({ module: "fetchFileToBuffer" }),
+      () =>
+        undici.fetch(url, {
+          ...init,
+          redirect: "follow",
+          dispatcher: getSecureDispatcher(skipTlsVerification),
+        }),
+    );
     return {
       response,
       buffer: Buffer.from(await response.arrayBuffer()),
@@ -94,11 +99,15 @@ export async function downloadFile(
 
   // TODO: maybe we could use tlsclient for this? for proxying
   try {
-    const response = await undici.fetch(url, {
-      ...init,
-      redirect: "follow",
-      dispatcher: getSecureDispatcher(skipTlsVerification),
-    });
+    const response = await executeFetchWithProxyRotation(
+      logger.child({ module: "downloadFile" }),
+      () =>
+        undici.fetch(url, {
+          ...init,
+          redirect: "follow",
+          dispatcher: getSecureDispatcher(skipTlsVerification),
+        }),
+    );
 
     // This should never happen in the current state of JS/Undici (2024), but let's check anyways.
     if (response.body === null) {

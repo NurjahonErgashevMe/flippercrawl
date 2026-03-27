@@ -93,18 +93,9 @@
 /apps/api/sharedLibs/html-transformer/*         @mogery
 /apps/api/src/lib/html-transformer.ts           @mogery
 
-# playwright-serice-ts
-/apps/playwright-service-ts/*                   @mogery
-
 # self-hosting
 /docker-compose.yaml                            @mogery
 /SELF_HOST.md                                   @mogery
-
-# SDKs
-/apps/python-sdk/*                              @rafaelsideguide @nickscamara
-/apps/js-sdk/*                                  @mogery @nickscamara
-/apps/rust-sdk/*                                @mogery
-/apps/go-sdk/*                                  @rafaelsideguide
 
 # CI/CD and GitHub Workflows
 /.github/*                                      @mogery @rafaelsideguide
@@ -116,5 +107,3 @@
 **/branding*                                    @abimaelmartell
 **/branding-script*                             @abimaelmartell
 
-# Examples
-/examples/*                                     @ericciarla @nickscamara

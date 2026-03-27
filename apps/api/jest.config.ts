@@ -1,7 +1,10 @@
 import { createDefaultEsmPreset, type JestConfigWithTsJest } from "ts-jest";
 
 const config: JestConfigWithTsJest = {
-  ...createDefaultEsmPreset(),
+  ...createDefaultEsmPreset({
+    // NodeNext без isolatedModules в tsconfig — ts-jest спамит TS151002
+    diagnostics: { ignoreCodes: [151002] },
+  }),
   verbose: true,
   testPathIgnorePatterns: ["<rootDir>/dist/"],
   forceExit: true,

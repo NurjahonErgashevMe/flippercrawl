@@ -85,7 +85,6 @@
     "@dqbd/tiktoken": "^1.0.22",
     "@google-cloud/storage": "^7.19.0",
     "@mendable/firecrawl-rs": "workspace:*",
-    "@openrouter/ai-sdk-provider": "^0.4.5",
     "@sentry/cli": "^2.58.2",
     "@sentry/node": "^10.27.0",
     "@supabase/supabase-js": "^2.52.0",

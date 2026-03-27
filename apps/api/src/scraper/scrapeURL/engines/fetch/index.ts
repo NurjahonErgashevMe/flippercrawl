@@ -9,6 +9,7 @@ import {
 } from "../utils/safeFetch";
 import { MockState, saveMock } from "../../lib/mock";
 import { TextDecoder } from "util";
+import { executeFetchWithProxyRotation } from "../../../../lib/proxyRotation";
 
 export async function scrapeURLWithFetch(
   meta: Meta,
@@ -51,12 +52,16 @@ export async function scrapeURLWithFetch(
     };
   } else {
     try {
-      const x = await undici.fetch(meta.rewrittenUrl ?? meta.url, {
-        dispatcher: getSecureDispatcher(meta.options.skipTlsVerification),
-        redirect: "follow",
-        headers: meta.options.headers,
-        signal: meta.abort.asSignal(),
-      });
+      const x = await executeFetchWithProxyRotation(
+        meta.logger.child({ method: "scrapeURLWithFetch" }),
+        () =>
+          undici.fetch(meta.rewrittenUrl ?? meta.url, {
+            dispatcher: getSecureDispatcher(meta.options.skipTlsVerification),
+            redirect: "follow",
+            headers: meta.options.headers,
+            signal: meta.abort.asSignal(),
+          }),
+      );
 
       const buf = Buffer.from(await x.arrayBuffer());
       let text = buf.toString("utf8");

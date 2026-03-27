@@ -49,7 +49,7 @@
     "lint": "oxlint .",
     "prepublishOnly": "napi prepublish -t npm",
     "version": "napi version",
-    "install": "pnpm build"
+    "install": "node scripts/install-native.cjs"
   },
   "devDependencies": {
     "@emnapi/runtime": "^1.5.0",

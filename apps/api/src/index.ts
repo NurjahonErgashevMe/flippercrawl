@@ -38,6 +38,7 @@ import { initializeEngineForcing } from "./scraper/WebScraper/utils/engine-forci
 import responseTime from "response-time";
 import { shutdownWebhookQueue } from "./services/webhook";
 import { shutdownIndexerQueue } from "./services/indexing/indexer-queue";
+import { scrapeOnlyApiGuard } from "./middleware/scrapeOnlyApi";
 
 const { createBullBoard } = require("@bull-board/api");
 const { BullMQAdapter } = require("@bull-board/api/bullMQAdapter");
@@ -45,6 +46,11 @@ const { ExpressAdapter } = require("@bull-board/express");
 
 const numCPUs = config.ENV === "local" ? 2 : os.cpus().length;
 logger.info(`Number of CPUs: ${numCPUs} available`);
+if (config.API_SCRAPE_ONLY) {
+  logger.info(
+    "API_SCRAPE_ONLY: only /v1/scrape, /v2/scrape, batch scrape and scrape status routes are exposed",
+  );
+}
 
 logger.info("Network info dump", {
   networkInterfaces: os.networkInterfaces(),
@@ -76,6 +82,10 @@ if (config.EXPRESS_TRUST_PROXY) {
   app.set("trust proxy", config.EXPRESS_TRUST_PROXY);
 }
 
+if (config.API_SCRAPE_ONLY) {
+  app.use(scrapeOnlyApiGuard);
+}
+
 const serverAdapter = new ExpressAdapter();
 serverAdapter.setBasePath(`/admin/${config.BULL_AUTH_KEY}/queues`);
 
@@ -89,7 +99,9 @@ const { addQueue, removeQueue, setQueues, replaceQueues } = createBullBoard({
   serverAdapter: serverAdapter,
 });
 
-app.use(`/admin/${config.BULL_AUTH_KEY}/queues`, serverAdapter.getRouter());
+if (!config.API_SCRAPE_ONLY) {
+  app.use(`/admin/${config.BULL_AUTH_KEY}/queues`, serverAdapter.getRouter());
+}
 
 app.get("/", (_, res) => {
   res.json({
@@ -106,7 +118,9 @@ app.get("/e2e-test", (_, res) => {
 app.use(v0Router);
 app.use("/v1", v1Router);
 app.use("/v2", v2Router);
-app.use(adminRouter);
+if (!config.API_SCRAPE_ONLY) {
+  app.use(adminRouter);
+}
 
 const DEFAULT_PORT = config.PORT;
 const HOST = config.HOST;
@@ -122,8 +136,9 @@ async function startServer(port = DEFAULT_PORT) {
     throw error;
   }
 
-  // Attach WebSocket proxy to the Express app
-  attachWsProxy(app);
+  if (!config.API_SCRAPE_ONLY) {
+    attachWsProxy(app);
+  }
 
   const server = app.listen(Number(port), HOST, () => {
     logger.info(`Worker ${process.pid} listening on port ${port}`);

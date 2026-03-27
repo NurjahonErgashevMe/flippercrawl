@@ -76,11 +76,40 @@ function makeSecureDispatcherNoCookies(skipTlsVerification: boolean) {
   return agent;
 }
 
-const secureDispatcher = makeSecureDispatcher(false);
-const secureDispatcherSkipTlsVerification = makeSecureDispatcher(true);
-const secureDispatcherNoCookies = makeSecureDispatcherNoCookies(false);
-const secureDispatcherNoCookiesSkipTlsVerification =
-  makeSecureDispatcherNoCookies(true);
+function rebuildDispatchers() {
+  secureDispatcher = makeSecureDispatcher(false);
+  secureDispatcherSkipTlsVerification = makeSecureDispatcher(true);
+  secureDispatcherNoCookies = makeSecureDispatcherNoCookies(false);
+  secureDispatcherNoCookiesSkipTlsVerification =
+    makeSecureDispatcherNoCookies(true);
+}
+
+let secureDispatcher: undici.Dispatcher;
+let secureDispatcherSkipTlsVerification: undici.Dispatcher;
+let secureDispatcherNoCookies: undici.Dispatcher;
+let secureDispatcherNoCookiesSkipTlsVerification: undici.Dispatcher;
+
+rebuildDispatchers();
+
+async function closeDispatcher(d: undici.Dispatcher) {
+  try {
+    await d.close();
+  } catch {
+    // ignore
+  }
+}
+
+/** После смены IP у мобильного прокси — закрыть пулы соединений и пересобрать агенты. */
+export async function resetProxyDispatchers(): Promise<void> {
+  if (!config.PROXY_SERVER) return;
+  await Promise.all([
+    closeDispatcher(secureDispatcher),
+    closeDispatcher(secureDispatcherSkipTlsVerification),
+    closeDispatcher(secureDispatcherNoCookies),
+    closeDispatcher(secureDispatcherNoCookiesSkipTlsVerification),
+  ]);
+  rebuildDispatchers();
+}
 
 export const getSecureDispatcher = (skipTlsVerification: boolean = false) =>
   skipTlsVerification ? secureDispatcherSkipTlsVerification : secureDispatcher;

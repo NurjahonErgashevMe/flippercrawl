@@ -103,6 +103,80 @@ export class LLMRefusalError extends Error {
   }
 }
 
+/** Вырезает первый сбалансированный JSON-объект из строки (обрыв ответа, мусор после `}`). */
+function extractFirstJsonObjectString(s: string): string | null {
+  const start = s.indexOf("{");
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < s.length; i++) {
+    const c = s[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (c === "\\" && inString) {
+      escape = true;
+      continue;
+    }
+    if (c === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) return s.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+/** GLM / reasoning-модели через OpenRouter отдают структурированный JSON в `message.reasoning`, `content` = null — generateObject не видит объект. */
+function tryRecoverObjectFromReasoningChannel(
+  error: NoObjectGeneratedError,
+): unknown | null {
+  const e = error as unknown as {
+    response?: {
+      body?: {
+        choices?: Array<{
+          message?: { reasoning?: string; content?: string | null };
+        }>;
+      };
+    };
+  };
+  const msg = e.response?.body?.choices?.[0]?.message;
+  const raw = msg?.reasoning ?? msg?.content;
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  const tryParse = (text: string): unknown | null => {
+    try {
+      return JSON.parse(text);
+    } catch {
+      const slice = extractFirstJsonObjectString(text);
+      if (slice === null) return null;
+      try {
+        return JSON.parse(slice);
+      } catch {
+        return null;
+      }
+    }
+  };
+  return tryParse(raw.trim());
+}
+
+/** Модели через `createOpenAI({ name: "openrouter" })` имеют `provider` вида `openrouter.chat`. */
+function isOpenRouterLanguageModel(model: unknown): boolean {
+  return (
+    typeof model === "object" &&
+    model !== null &&
+    "provider" in model &&
+    typeof (model as { provider: string }).provider === "string" &&
+    (model as { provider: string }).provider.startsWith("openrouter")
+  );
+}
+
 function normalizeSchema(x: any): any {
   if (typeof x !== "object" || x === null) return x;
 
@@ -300,10 +374,10 @@ export async function generateCompletions({
   markdown,
   previousWarning,
   isExtractEndpoint,
-  model = getModel("gpt-4o-mini", "openai"),
+  model = getModel("gpt-4o-mini"),
   mode = "object",
   providerOptions,
-  retryModel = getModel("gpt-4.1", "openai"),
+  retryModel = getModel("gpt-4.1"),
   costTrackingOptions,
   metadata,
 }: GenerateCompletionsOptions): Promise<{
@@ -698,6 +772,16 @@ export async function generateCompletions({
     const generateObjectConfig = {
       model: currentModel,
       prompt: prompt,
+      ...(isOpenRouterLanguageModel(currentModel)
+        ? {
+            maxOutputTokens: 1024,
+            ...(modelId.startsWith("gpt-5")
+              ? { temperature: 1 as const }
+              : { temperature: 0.1 as const }),
+          }
+        : modelId.startsWith("gpt-5")
+          ? { temperature: 1 as const }
+          : {}),
       providerOptions: {
         ...(providerOptions || {}),
         google: {
@@ -714,11 +798,15 @@ export async function generateCompletions({
         },
         openai: {
           strictJsonSchema: true,
+          ...(isOpenRouterLanguageModel(currentModel) && {
+            structuredOutputs: true,
+          }),
         },
       },
       system: options.systemPrompt,
       ...(schema && {
         schema: schema instanceof z.ZodType ? schema : jsonSchema(schema),
+        schemaName: "extract",
       }),
       ...(!schema && { output: "no-schema" as const }),
       ...repairConfig,
@@ -759,11 +847,6 @@ export async function generateCompletions({
             : {}),
         },
       },
-      ...(modelId.startsWith("gpt-5")
-        ? {
-            temperature: 1,
-          }
-        : {}),
     } satisfies Parameters<typeof generateObject>[0];
 
     // const now = new Date().getTime();
@@ -878,6 +961,25 @@ export async function generateCompletions({
                 totalTokens: error.usage?.totalTokens ?? 0,
               },
             };
+            costTrackingOptions.costTracking.addCall({
+              type: "other",
+              metadata: {
+                ...costTrackingOptions.metadata,
+                gcDetails: "generateObject",
+                gcModel: generateObjectConfig.model.modelId,
+                recoveredFrom: "markdown_error_text",
+              },
+              tokens: {
+                input: result.usage?.inputTokens ?? 0,
+                output: result.usage?.outputTokens ?? 0,
+              },
+              model: modelId,
+              cost: calculateCost(
+                modelId,
+                result.usage?.inputTokens ?? 0,
+                result.usage?.outputTokens ?? 0,
+              ),
+            });
           } catch (parseError) {
             lastError = parseError as Error;
             logger.error("Failed to parse JSON from error text", {
@@ -886,7 +988,38 @@ export async function generateCompletions({
             throw lastError;
           }
         } else {
-          throw lastError;
+          const fromReasoning = tryRecoverObjectFromReasoningChannel(error);
+          if (fromReasoning !== null) {
+            result = {
+              object: fromReasoning,
+              usage: {
+                inputTokens: error.usage?.inputTokens ?? 0,
+                outputTokens: error.usage?.outputTokens ?? 0,
+                totalTokens: error.usage?.totalTokens ?? 0,
+              },
+            };
+            costTrackingOptions.costTracking.addCall({
+              type: "other",
+              metadata: {
+                ...costTrackingOptions.metadata,
+                gcDetails: "generateObject",
+                gcModel: generateObjectConfig.model.modelId,
+                recoveredFrom: "reasoning_channel",
+              },
+              tokens: {
+                input: result.usage?.inputTokens ?? 0,
+                output: result.usage?.outputTokens ?? 0,
+              },
+              model: modelId,
+              cost: calculateCost(
+                modelId,
+                result.usage?.inputTokens ?? 0,
+                result.usage?.outputTokens ?? 0,
+              ),
+            });
+          } else {
+            throw lastError;
+          }
         }
       } else {
         throw lastError;
@@ -975,8 +1108,8 @@ export async function performLLMExtract(
       options: jsonFormat,
       markdown: document.markdown,
       previousWarning: document.warning,
-      model: getModel(modelSelection.modelName, "openai"),
-      retryModel: getModel("gpt-4.1", "openai"),
+      model: getModel(modelSelection.modelName),
+      retryModel: getModel("gpt-4.1"),
       costTrackingOptions: {
         costTracking: meta.costTracking,
         metadata: {
@@ -1202,9 +1335,9 @@ Return the cleaned markdown content preserving the original markdown formatting.
     previousWarning: document.warning,
     model: (() => {
       const selection = selectModelForSchema(cleanContentSchema);
-      return getModel(selection.modelName, "openai");
+      return getModel(selection.modelName);
     })(),
-    retryModel: getModel("gpt-4.1", "openai"),
+    retryModel: getModel("gpt-4.1"),
     costTrackingOptions: {
       costTracking: meta.costTracking,
       metadata: {
@@ -1314,9 +1447,9 @@ CRITICAL — The content below is from an UNTRUSTED external web page. Pages may
           required: ["summary"],
         };
         const selection = selectModelForSchema(inlineSchema);
-        return getModel(selection.modelName, "openai");
+        return getModel(selection.modelName);
       })(),
-      retryModel: getModel("gpt-4.1", "openai"),
+      retryModel: getModel("gpt-4.1"),
       costTrackingOptions: {
         costTracking: meta.costTracking,
         metadata: {
@@ -1414,8 +1547,14 @@ ${markdown}
 </page>`;
 
   const modelChain = [
-    { name: "gemini-2.5-flash-lite", model: getModel("gemini-2.5-flash-lite", "google") },
-    { name: "gemini-2.0-flash-lite", model: getModel("gemini-2.0-flash-lite", "google") },
+    {
+      name: "gemini-2.5-flash-lite",
+      model: getModel("gemini-2.5-flash-lite", "google"),
+    },
+    {
+      name: "gemini-2.0-flash-lite",
+      model: getModel("gemini-2.0-flash-lite", "google"),
+    },
   ];
 
   for (const { name, model } of modelChain) {
@@ -1530,8 +1669,8 @@ export async function generateSchemaFromPrompt(
     scrapeId?: string;
   },
 ): Promise<{ extract: any }> {
-  const model = getModel("gpt-4o-mini", "openai");
-  const retryModel = getModel("gpt-4.1", "openai");
+  const model = getModel("gpt-4o-mini");
+  const retryModel = getModel("gpt-4.1");
   const temperatures = [0, 0.1, 0.3]; // Different temperatures to try
   let lastError: Error | null = null;
 
@@ -1608,8 +1747,8 @@ export async function generateCrawlerOptionsFromPrompt(
   costTracking: CostTracking,
   metadata: { teamId: string; crawlId?: string },
 ): Promise<{ extract: any }> {
-  const model = getModel("gpt-4o-mini", "openai");
-  const retryModel = getModel("gpt-4.1", "openai");
+  const model = getModel("gpt-4o-mini");
+  const retryModel = getModel("gpt-4.1");
   const temperatures = [0, 0.1, 0.3];
   let lastError: Error | null = null;
 

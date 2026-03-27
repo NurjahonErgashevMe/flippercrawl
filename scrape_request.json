@@ -1,0 +1,88 @@
+{
+  "url": "https://www.cian.ru/sale/flat/326727649/",
+  "excludeTags": [
+    "svg",
+    "img",
+    "script",
+    "style",
+    "footer",
+    "header",
+    "[data-name='CardSectionNew']",
+    "[data-name='OfferHistoryContainer']",
+    "[data-name='OfferCardPageLayoutFooter']",
+    "[id='adfox-stretch-banner']"
+  ],
+  "formats": [
+    "markdown",
+    {
+      "type": "json",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "cian_id": {
+            "type": "string",
+            "description": "ID объявления из URL (число в конце /sale/flat/XXXXXX/)"
+          },
+          "price": { "type": "integer", "description": "Цена в рублях" },
+          "price_per_m2": { "type": "integer", "description": "Цена за м²" },
+          "title": { "type": "string", "description": "Заголовок объявления" },
+          "description": {
+            "type": "string",
+            "description": "Текст описания объявления"
+          },
+          "address": {
+            "type": "object",
+            "properties": {
+              "full": { "type": "string", "description": "Полный адрес" },
+              "district": { "type": "string", "description": "Район" },
+              "metro_station": {
+                "type": "string",
+                "description": "Ближайшая станция метро"
+              },
+              "okrug": {
+                "type": "string",
+                "description": "Округ (ЦАО, ЮВАО и т.д.)"
+              }
+            }
+          },
+          "area": { "type": "number", "description": "Общая площадь в м²" },
+          "rooms": { "type": "integer", "description": "Количество комнат" },
+          "housing_type": {
+            "type": "string",
+            "description": "Тип жилья (Вторичка, Новостройка)"
+          },
+          "floor_info": {
+            "type": "object",
+            "properties": {
+              "current": { "type": "integer", "description": "Этаж квартиры" },
+              "all": { "type": "integer", "description": "Всего этажей в доме" }
+            }
+          },
+          "construction_year": {
+            "type": "integer",
+            "description": "Год постройки дома"
+          },
+          "renovation": { "type": "string", "description": "Тип ремонта" },
+          "metro_walk_time": {
+            "type": "integer",
+            "description": "Минут пешком до ближайшего метро"
+          },
+          "total_views": {
+            "type": "integer",
+            "description": "Всего просмотров — число ДО запятой в строке 'X просмотров, Y за сегодня'"
+          },
+          "unique_views": {
+            "type": "integer",
+            "description": "Просмотров сегодня — число ПОСЛЕ запятой в строке 'X просмотров, Y за сегодня'"
+          },
+          "is_active": {
+            "type": "boolean",
+            "description": "Активно ли объявление"
+          }
+        },
+        "required": ["cian_id", "price", "area"]
+      },
+      "systemPrompt": "Ты экстрактор данных недвижимости с Cian.ru. Верни ТОЛЬКО валидный JSON со ВСЕМИ полями из структуры ниже. Не пропускай поля — если данных нет, ставь null.\n\nОЖИДАЕМАЯ СТРУКТУРА (заполни реальными данными):\n{\"cian_id\":\"326727649\",\"price\":14600000,\"price_per_m2\":265938,\"title\":\"...\",\"description\":\"...\",\"address\":{\"full\":\"...\",\"district\":\"...\",\"metro_station\":\"...\",\"okrug\":\"...\"},\"area\":54.9,\"rooms\":2,\"housing_type\":\"Вторичка\",\"floor_info\":{\"current\":15,\"all\":17},\"construction_year\":2019,\"renovation\":\"...\",\"metro_walk_time\":8,\"total_views\":813,\"unique_views\":9,\"is_active\":true}\n\nПРАВИЛА:\n- cian_id: число из конца URL /sale/flat/XXXXXX/ (строкой)\n- unique_views: число ПОСЛЕ запятой в строке 'X просмотров, Y за сегодня'\n- total_views: число ДО запятой в той же строке\n- metro_walk_time: минуты до БЛИЖАЙШЕЙ станции метро\n- is_active: true если объявление доступно\n- Числа без кавычек, строки в кавычках"
+    }
+  ]
+}

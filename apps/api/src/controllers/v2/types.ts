@@ -346,6 +346,8 @@ const jsonFormatWithOptions = z.strictObject({
       message: OPENAI_SCHEMA_ERROR_MESSAGE,
     }),
   prompt: z.string().max(10000).optional(),
+  /** Системный промпт для LLM при извлечении JSON (передаётся в generateObject как `system`) */
+  systemPrompt: z.string().max(50000).optional(),
 });
 
 export type JsonFormatWithOptions = z.output<typeof jsonFormatWithOptions>;

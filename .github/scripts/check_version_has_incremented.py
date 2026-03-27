@@ -3,17 +3,17 @@ checks local versions against published versions.
 
 # Usage:
 
-python .github/scripts/check_version_has_incremented.py js ./apps/js-sdk/firecrawl @mendable/firecrawl-js 
+python .github/scripts/check_version_has_incremented.py js ./path/to/package @scope/name
 Local version: 0.0.22
 Published version: 0.0.21
 true
 
-python .github/scripts/check_version_has_incremented.py python ./apps/python-sdk/firecrawl firecrawl-py
+python .github/scripts/check_version_has_incremented.py python ./path/to/package package-name-on-pypi
 Local version: 0.0.11
 Published version: 0.0.11
 false
 
-python .github/scripts/check_version_has_incremented.py java ./apps/java-sdk com.firecrawl:firecrawl-java
+python .github/scripts/check_version_has_incremented.py java ./path/to/java-project com.vendor:artifact
 Local version: 1.0.0
 Published version: 0.0.0  (0.0.0 means not yet published on Maven Central)
 true

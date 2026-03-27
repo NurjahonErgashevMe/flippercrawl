@@ -1,8 +1,39 @@
 import { config } from "./config";
-import { type ChildProcess, spawn } from "child_process";
+import { existsSync } from "fs";
+import { type ChildProcess, execSync, spawn } from "child_process";
 import * as net from "net";
 import { basename, join } from "path";
 import { HTML_TO_MARKDOWN_PATH } from "./natives";
+
+/** Корень apps/api: tsx (src/harness.ts) и скомпилированный dist/src/harness.js */
+function resolveApiRoot(): string {
+  let dir = join(__dirname, "..");
+  if (existsSync(join(dir, "package.json"))) {
+    return dir;
+  }
+  dir = join(__dirname, "..", "..");
+  if (existsSync(join(dir, "package.json"))) {
+    return dir;
+  }
+  return process.cwd();
+}
+
+const API_ROOT = resolveApiRoot();
+const GO_HTML_TO_MD_DIR = join(API_ROOT, "sharedLibs", "go-html-to-md");
+
+/** html-to-markdown.go — cgo; на Windows без gcc Go отключает CGO и даёт «no Go source files». */
+function assertWinGccForGoCgo(): void {
+  if (process.platform !== "win32") return;
+  try {
+    execSync("gcc --version", { stdio: "ignore" });
+  } catch {
+    throw new Error(
+      "Сборка sharedLibs/go-html-to-md на Windows требует CGO и gcc в PATH. " +
+        "Сообщение «go: no Go source files» обычно значит CGO_ENABLED=0 (нет C-компилятора). " +
+        "Установите MinGW-w64 / MSYS2 (gcc) или запускайте API через Docker, где сборка уже настроена.",
+    );
+  }
+}
 
 const childProcesses = new Set<ChildProcess>();
 const stopping = new WeakSet<ChildProcess>(); // processes we're intentionally stopping
@@ -229,10 +260,12 @@ function execForward(
   name: string,
   command: string | string[],
   env: Record<string, string> = {},
+  options?: { cwd?: string },
 ): ProcessResult {
   let child: ChildProcess;
   let displayCommand = "";
   const isWindows = process.platform === "win32";
+  const cwd = options?.cwd ?? API_ROOT;
 
   const isReduceNoise = env.NUQ_REDUCE_NOISE === "true";
   delete env.NUQ_REDUCE_NOISE;
@@ -241,12 +274,14 @@ function execForward(
     displayCommand = command;
     if (isWindows) {
       child = spawn("cmd", ["/c", command], {
+        cwd,
         env: { ...process.env, ...env },
         shell: false,
         detached: false,
       });
     } else {
       child = spawn("sh", ["-c", command], {
+        cwd,
         env: { ...process.env, ...env },
         shell: false,
         detached: true,
@@ -256,6 +291,7 @@ function execForward(
     const [cmd, ...args] = command;
     displayCommand = [cmd, ...args].join(" ");
     child = spawn(cmd, args, {
+      cwd,
       env: { ...process.env, ...env },
       shell: false,
       detached: !isWindows,
@@ -690,17 +726,24 @@ async function installDependencies() {
     })(),
 
     (async () => {
+      assertWinGccForGoCgo();
       logger.info("Installing Go dependencies");
       const install = execForward(
         "go@install",
-        "cd sharedLibs/go-html-to-md && go mod tidy",
+        "go mod tidy",
+        {},
+        {
+          cwd: GO_HTML_TO_MD_DIR,
+        },
       );
       await install.promise;
 
       logger.info("Building Go module");
       const build = execForward(
         "go@build",
-        `cd sharedLibs/go-html-to-md && go build -o ${basename(HTML_TO_MARKDOWN_PATH)} -buildmode=c-shared html-to-markdown.go`,
+        `go build -o ${basename(HTML_TO_MARKDOWN_PATH)} -buildmode=c-shared html-to-markdown.go`,
+        {},
+        { cwd: GO_HTML_TO_MD_DIR },
       );
       await build.promise;
     })(),
