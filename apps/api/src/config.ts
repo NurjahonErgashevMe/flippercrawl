@@ -127,9 +127,11 @@ const configSchema = z.object({
   WORKER_PORT: z.coerce.number().default(3005),
   NUQ_WORKER_PORT: z.coerce.number().default(3000).catch(3000), // todo: investigate why .catch is needed
   NUQ_WORKER_START_PORT: z.coerce.number().default(3006),
-  NUQ_WORKER_COUNT: z.coerce.number().default(5),
-  NUQ_PREFETCH_WORKER_PORT: z.coerce.number().default(3011).catch(3011), // todo: investigate why .catch is needed
-  NUQ_RECONCILER_WORKER_PORT: z.coerce.number().default(3012).catch(3012),
+  /** Параллельных scrape-job (по одному URL на воркер). Harness поднимает столько процессов nuq-worker. */
+  NUQ_WORKER_COUNT: z.coerce.number().default(20),
+  /** Должен быть NUQ_WORKER_START_PORT + NUQ_WORKER_COUNT (если меняете COUNT — поправьте или задайте в .env). */
+  NUQ_PREFETCH_WORKER_PORT: z.coerce.number().default(3026).catch(3026), // todo: investigate why .catch is needed
+  NUQ_RECONCILER_WORKER_PORT: z.coerce.number().default(3027).catch(3027),
   EXTRACT_WORKER_PORT: z.coerce.number().default(3004),
   NUQ_WAIT_MODE: z.string().optional(),
 
@@ -165,6 +167,13 @@ const configSchema = z.object({
   PROXY_ROTATION_POST_DELAY_MS: z.coerce.number().int().min(0).default(1500),
   /** При обрыве соединения с прокси вызывать PROXY_ROTATION_URL (если задан) */
   PROXY_ROTATION_ON_TRANSPORT_ERROR: z.stringbool().optional().default(true),
+
+  /** Второй прокси (другой провайдер): используется после ротации основного при 403/429 и при повторных обрывах основного */
+  PROXY_SERVER_FALLBACK: z.string().optional(),
+  PROXY_USERNAME_FALLBACK: z.string().optional(),
+  PROXY_PASSWORD_FALLBACK: z.string().optional(),
+  /** Опционально: GET для смены IP у резервного провайдера (если появится). Без URL — только сброс соединений + задержка */
+  PROXY_FALLBACK_ROTATION_URL: z.string().optional(),
 
   /** Только эндпоинты scrape (и batch/status); остальные API — 404 */
   API_SCRAPE_ONLY: z.stringbool().optional().default(false),

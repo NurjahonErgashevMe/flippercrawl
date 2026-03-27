@@ -1,7 +1,12 @@
 import { fetch, Agent } from "undici";
 import type { Logger } from "winston";
 import { config } from "../config";
-import { resetProxyDispatchers } from "../scraper/scrapeURL/engines/utils/safeFetch";
+import {
+  hasProxyFallback,
+  resetProxyDispatchers,
+  runWithProxySlot,
+  type ProxySlot,
+} from "../scraper/scrapeURL/engines/utils/safeFetch";
 
 const directAgent = new Agent({
   connect: { rejectUnauthorized: true },
@@ -10,9 +15,17 @@ const directAgent = new Agent({
 let rotationQueue: Promise<void> = Promise.resolve();
 let lastRotationTime = 0;
 
+let fallbackRotationQueue: Promise<void> = Promise.resolve();
+let lastFallbackRotationTime = 0;
+
 function proxyRotationEnabled(): boolean {
   const url = config.PROXY_ROTATION_URL?.trim();
   return !!(config.PROXY_SERVER && url);
+}
+
+function fallbackProxyRotationEnabled(): boolean {
+  const url = config.PROXY_FALLBACK_ROTATION_URL?.trim();
+  return !!(hasProxyFallback() && url);
 }
 
 function parseRotationStatuses(): number[] {
@@ -31,11 +44,38 @@ function postDelayMs(): number {
   return config.PROXY_ROTATION_POST_DELAY_MS;
 }
 
+async function callRotationUrl(
+  log: Logger,
+  rotationUrl: string,
+  ctx: { reason: string; statusCode?: number; label: string },
+): Promise<void> {
+  log.info(`${ctx.label}: requesting IP rotation`, {
+    reason: ctx.reason,
+    statusCode: ctx.statusCode,
+  });
+
+  try {
+    const res = await fetch(rotationUrl, {
+      dispatcher: directAgent,
+      redirect: "follow",
+    });
+    if (!res.ok) {
+      log.warn(`${ctx.label}: rotation endpoint returned non-OK`, {
+        status: res.status,
+      });
+    }
+  } catch (e) {
+    log.warn(`${ctx.label}: rotation endpoint request failed`, {
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+}
+
 /**
- * Запрос смены IP у провайдера (без прокси), сброс исходящих undici-диспетчеров,
+ * Запрос смены IP у провайдера основного прокси (без прокси), сброс slot 0,
  * пауза перед следующим запросом. Вызовы сериализуются (cooldown).
  */
-async function rotateProxyAndResetDispatchers(
+async function rotatePrimaryProxyAndReset(
   log: Logger,
   ctx: { reason: string; statusCode?: number },
 ): Promise<void> {
@@ -52,28 +92,12 @@ async function rotateProxyAndResetDispatchers(
       await new Promise<void>(r => setTimeout(r, wait));
     }
 
-    log.info("Mobile proxy: requesting IP rotation", {
-      reason: ctx.reason,
-      statusCode: ctx.statusCode,
+    await callRotationUrl(log, rotationUrl, {
+      ...ctx,
+      label: "Primary proxy",
     });
 
-    try {
-      const res = await fetch(rotationUrl, {
-        dispatcher: directAgent,
-        redirect: "follow",
-      });
-      if (!res.ok) {
-        log.warn("Mobile proxy: rotation endpoint returned non-OK", {
-          status: res.status,
-        });
-      }
-    } catch (e) {
-      log.warn("Mobile proxy: rotation endpoint request failed", {
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
-
-    await resetProxyDispatchers();
+    await resetProxyDispatchers(0);
     lastRotationTime = Date.now();
 
     if (postDelay > 0) {
@@ -82,6 +106,39 @@ async function rotateProxyAndResetDispatchers(
   });
 
   await rotationQueue;
+}
+
+async function rotateFallbackProxyAndReset(
+  log: Logger,
+  ctx: { reason: string; statusCode?: number },
+): Promise<void> {
+  const rotationUrl = config.PROXY_FALLBACK_ROTATION_URL?.trim();
+  if (!rotationUrl) return;
+
+  const cooldown = config.PROXY_ROTATION_COOLDOWN_MS;
+  const postDelay = postDelayMs();
+
+  fallbackRotationQueue = fallbackRotationQueue.then(async () => {
+    const now = Date.now();
+    const wait = Math.max(0, cooldown - (now - lastFallbackRotationTime));
+    if (wait > 0) {
+      await new Promise<void>(r => setTimeout(r, wait));
+    }
+
+    await callRotationUrl(log, rotationUrl, {
+      ...ctx,
+      label: "Fallback proxy",
+    });
+
+    await resetProxyDispatchers(1);
+    lastFallbackRotationTime = Date.now();
+
+    if (postDelay > 0) {
+      await new Promise<void>(r => setTimeout(r, postDelay));
+    }
+  });
+
+  await fallbackRotationQueue;
 }
 
 function isProxyTransportError(err: unknown): boolean {
@@ -126,20 +183,35 @@ function isProxyTransportError(err: unknown): boolean {
 async function recoverAfterProxyTransportFailure(
   log: Logger,
   err: unknown,
+  slot: ProxySlot,
 ): Promise<void> {
   if (!config.PROXY_SERVER) return;
 
   log.warn("Proxy: transport error, resetting connections", {
+    slot,
     error: err instanceof Error ? err.message : String(err),
   });
+
+  if (slot === 1) {
+    if (fallbackProxyRotationEnabled()) {
+      await rotateFallbackProxyAndReset(log, { reason: "transport_error" });
+    } else {
+      await resetProxyDispatchers(1);
+      const d = postDelayMs();
+      if (d > 0) {
+        await new Promise<void>(r => setTimeout(r, d));
+      }
+    }
+    return;
+  }
 
   if (
     proxyRotationEnabled() &&
     config.PROXY_ROTATION_ON_TRANSPORT_ERROR !== false
   ) {
-    await rotateProxyAndResetDispatchers(log, { reason: "transport_error" });
+    await rotatePrimaryProxyAndReset(log, { reason: "transport_error" });
   } else {
-    await resetProxyDispatchers();
+    await resetProxyDispatchers(0);
     const d = postDelayMs();
     if (d > 0) {
       await new Promise<void>(r => setTimeout(r, d));
@@ -147,8 +219,106 @@ async function recoverAfterProxyTransportFailure(
   }
 }
 
+async function recoverAfterHttpRetryable(
+  log: Logger,
+  slot: ProxySlot,
+  statusCode: number,
+  primaryRotationUsed: boolean,
+  primaryPlainResetDone: boolean,
+): Promise<{
+  primaryRotationUsed: boolean;
+  primaryPlainResetDone: boolean;
+  slot: ProxySlot;
+}> {
+  if (slot === 0) {
+    if (proxyRotationEnabled() && !primaryRotationUsed) {
+      await rotatePrimaryProxyAndReset(log, {
+        reason: "http_status",
+        statusCode,
+      });
+      return {
+        primaryRotationUsed: true,
+        primaryPlainResetDone,
+        slot: 0,
+      };
+    }
+    if (
+      hasProxyFallback() &&
+      !proxyRotationEnabled() &&
+      !primaryPlainResetDone
+    ) {
+      log.warn(
+        "HTTP status on primary; resetting connections before fallback",
+        {
+          status: statusCode,
+        },
+      );
+      await resetProxyDispatchers(0);
+      const d = postDelayMs();
+      if (d > 0) {
+        await new Promise<void>(r => setTimeout(r, d));
+      }
+      return {
+        primaryRotationUsed,
+        primaryPlainResetDone: true,
+        slot: 0,
+      };
+    }
+    if (hasProxyFallback()) {
+      log.info("Proxy: switching to fallback after primary retries exhausted", {
+        statusCode,
+      });
+      await resetProxyDispatchers(1);
+      const d = postDelayMs();
+      if (d > 0) {
+        await new Promise<void>(r => setTimeout(r, d));
+      }
+      return {
+        primaryRotationUsed,
+        primaryPlainResetDone,
+        slot: 1,
+      };
+    }
+    log.warn("HTTP status suggests retry; resetting primary proxy dispatcher", {
+      status: statusCode,
+    });
+    await resetProxyDispatchers(0);
+    const d = postDelayMs();
+    if (d > 0) {
+      await new Promise<void>(r => setTimeout(r, d));
+    }
+    return {
+      primaryRotationUsed,
+      primaryPlainResetDone,
+      slot: 0,
+    };
+  }
+
+  if (fallbackProxyRotationEnabled()) {
+    await rotateFallbackProxyAndReset(log, {
+      reason: "http_status",
+      statusCode,
+    });
+  } else {
+    log.warn("HTTP status on fallback; resetting fallback connections", {
+      status: statusCode,
+    });
+    await resetProxyDispatchers(1);
+    const d = postDelayMs();
+    if (d > 0) {
+      await new Promise<void>(r => setTimeout(r, d));
+    }
+  }
+  return {
+    primaryRotationUsed,
+    primaryPlainResetDone,
+    slot: 1,
+  };
+}
+
 /**
- * Выполняет fetch с повтором после 403/429 (сброс или смена IP) и после обрыва соединения с прокси.
+ * Выполняет fetch с повтором после 403/429 и обрывов: сначала основной прокси
+ * (с API ротации при необходимости), затем резервный провайдер.
  */
 export async function executeFetchWithProxyRotation(
   log: Logger,
@@ -159,28 +329,31 @@ export async function executeFetchWithProxyRotation(
     : 1;
 
   let lastError: unknown;
+  let slot: ProxySlot = 0;
+  let primaryRotationUsed = false;
+  let primaryPlainResetDone = false;
+  let transportFailuresOnPrimary = 0;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
-      const res = await exec();
+      const res = await runWithProxySlot(slot, () => exec());
+
+      if (slot === 0) {
+        transportFailuresOnPrimary = 0;
+      }
 
       if (shouldRetryHttpForProxy(res.status) && attempt < maxAttempts - 1) {
         await res.arrayBuffer().catch(() => {});
-        if (proxyRotationEnabled()) {
-          await rotateProxyAndResetDispatchers(log, {
-            reason: "http_status",
-            statusCode: res.status,
-          });
-        } else {
-          log.warn("HTTP status suggests retry; resetting proxy dispatcher", {
-            status: res.status,
-          });
-          await resetProxyDispatchers();
-          const d = postDelayMs();
-          if (d > 0) {
-            await new Promise<void>(r => setTimeout(r, d));
-          }
-        }
+        const next = await recoverAfterHttpRetryable(
+          log,
+          slot,
+          res.status,
+          primaryRotationUsed,
+          primaryPlainResetDone,
+        );
+        primaryRotationUsed = next.primaryRotationUsed;
+        primaryPlainResetDone = next.primaryPlainResetDone;
+        slot = next.slot;
         continue;
       }
 
@@ -194,7 +367,29 @@ export async function executeFetchWithProxyRotation(
       ) {
         throw e;
       }
-      await recoverAfterProxyTransportFailure(log, e);
+
+      if (slot === 0) {
+        transportFailuresOnPrimary += 1;
+        if (hasProxyFallback() && transportFailuresOnPrimary >= 2) {
+          log.warn(
+            "Proxy: repeated transport errors on primary, trying fallback",
+            {
+              error: e instanceof Error ? e.message : String(e),
+            },
+          );
+          slot = 1;
+          transportFailuresOnPrimary = 0;
+          await resetProxyDispatchers(1);
+          const d = postDelayMs();
+          if (d > 0) {
+            await new Promise<void>(r => setTimeout(r, d));
+          }
+          continue;
+        }
+        await recoverAfterProxyTransportFailure(log, e, 0);
+      } else {
+        await recoverAfterProxyTransportFailure(log, e, 1);
+      }
     }
   }
 
