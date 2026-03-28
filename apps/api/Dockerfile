@@ -48,6 +48,9 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
 # Build the application
 RUN pnpm run build
 
+# В образ уходит только шаблон: реальный proxies.txt в .dockerignore и монтируется при запуске
+RUN cp proxies.example.txt proxies.txt
+
 # Remove dev dependencies
 RUN pnpm prune --prod --ignore-scripts
 
@@ -70,5 +73,8 @@ COPY --from=build /app/native ./native
 
 # Copy Go shared library
 COPY --from=go-build /app/sharedLibs/go-html-to-md/libhtml-to-markdown.so ./sharedLibs/go-html-to-md/
+
+# Плейсхолдер пула прокси (перекрывается volume в docker-compose)
+COPY --from=build /app/proxies.txt /app/proxies.txt
 
 CMD ["node", "dist/src/harness.js", "--start-docker"]

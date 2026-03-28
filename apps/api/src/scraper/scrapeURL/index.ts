@@ -841,6 +841,17 @@ async function scrapeURLLoop(meta: Meta): Promise<ScrapeUrlResponse> {
     // NOTE: for sitemap, we don't need all the transformers, need to skip unused ones
     document = await executeTransformers(meta, document);
 
+    meta.logger.info(
+      `[scrape.pipeline] Трансформеры завершены, документ собран (движок ${result.engine}, rawHtml ${document.rawHtml?.length ?? 0} симв., markdown ${document.markdown?.length ?? 0} симв., HTTP ${document.metadata.statusCode})`,
+      {
+        phase: "post_transformers_ready",
+        engine: result.engine,
+        htmlChars: document.rawHtml?.length ?? 0,
+        markdownChars: document.markdown?.length ?? 0,
+        statusCode: document.metadata.statusCode,
+      },
+    );
+
     // Set final span attributes
     setSpanAttributes(span, {
       "engine.final_status_code": document.metadata.statusCode,
@@ -866,7 +877,7 @@ export async function scrapeURL(
   internalOptions: InternalOptions,
   costTracking: CostTracking,
 ): Promise<ScrapeUrlResponse> {
-  return withSpan("scrape.pipeline", async span => {
+  return withSpan("scrape.url", async span => {
     const meta = await buildMetaObject(
       id,
       url,

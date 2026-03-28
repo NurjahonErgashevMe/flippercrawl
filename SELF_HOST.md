@@ -68,6 +68,8 @@ USE_DB_AUTHENTICATION=false
 # PROXY_SERVER=
 # PROXY_USERNAME=
 # PROXY_PASSWORD=
+# Пул портов (Decodo и т.п.): скопируйте `apps/api/proxies.example.txt` → `apps/api/proxies.txt`, заполните строки.
+# В Docker Compose файл монтируется в контейнер как `/app/proxies.txt`; переменная `PROXY_SERVER_LIST_FILE` задаётся в `docker-compose.yaml`.
 
 ## === /search API ===
 # By default, the /search API will use Google search.

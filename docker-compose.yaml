@@ -38,6 +38,8 @@ services:
       REDIS_URL: redis://redis:6379
       REDIS_RATE_LIMIT_URL: redis://redis:6379
       POSTGRES_HOST: nuq-postgres
+      # Фиксированный путь в контейнере (не зависит от cwd); файл монтируется ниже
+      PROXY_SERVER_LIST_FILE: /app/proxies.txt
     depends_on:
       redis:
         condition: service_started
@@ -45,10 +47,13 @@ services:
         condition: service_healthy
     ports:
       - "${PORT:-3002}:${INTERNAL_PORT:-3002}"
+    volumes:
+      # Реальный пул портов Decodo; не кладём секреты в слои образа (.dockerignore → proxies.txt)
+      - ./apps/api/proxies.txt:/app/proxies.txt:ro
     command: node dist/src/harness.js --start-docker
-    cpus: 4.0
-    mem_limit: 8G
-    memswap_limit: 8G
+    cpus: 6.0
+    mem_limit: 10G
+    memswap_limit: 10G
 
   redis:
     image: redis:alpine

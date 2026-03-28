@@ -1095,6 +1095,16 @@ export async function performLLMExtract(
       return document;
     }
 
+    const mdLen = document.markdown?.length ?? 0;
+    meta.logger.info(
+      `[scrape.pipeline] Передача в LLM для JSON-extract (markdown ${mdLen} симв.)…`,
+      {
+        phase: "llm_extract_enter",
+        markdownChars: mdLen,
+        willRunJsonExtract: true,
+      },
+    );
+
     // const originalOptions = meta.options.extract!;
 
     // let generationOptions = { ...originalOptions }; // Start with original options
@@ -1137,6 +1147,19 @@ export async function performLLMExtract(
           functionId: "performLLMExtract",
         },
       });
+
+    const hasLast =
+      (extractedDataArray[extractedDataArray.length - 1] ?? null) != null;
+    meta.logger.info(
+      `[scrape.pipeline] LLM JSON-extract завершён: страниц ${extractedDataArray.length}, данные ${hasLast ? "получены" : "нет"}, предупреждение ${warning ? "да" : "нет"}`,
+      {
+        phase: "llm_extract_model_done",
+        pages: extractedDataArray.length,
+        hasLastPageData: hasLast,
+        warning: !!warning,
+        costLimitExceeded: !!costLimitExceededTokenUsage,
+      },
+    );
 
     if (warning) {
       document.warning =

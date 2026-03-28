@@ -3,3 +3,5 @@
 **/target/
 .env
 *.csv
+# Секреты не в слои образа — реальный список монтируется в /app/proxies.txt (см. docker-compose)
+proxies.txt

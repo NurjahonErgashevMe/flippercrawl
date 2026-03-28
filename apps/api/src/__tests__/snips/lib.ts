@@ -1,5 +1,6 @@
 import { configDotenv } from "dotenv";
 import { config } from "../../config";
+import { getPrimaryProxyEndpoints } from "../../scraper/scrapeURL/engines/utils/safeFetch";
 configDotenv();
 
 import { TeamFlags } from "../../controllers/v1/types";
@@ -29,7 +30,7 @@ export const HAS_AI = !!(
 );
 export const HAS_FIRE_ENGINE = !!config.FIRE_ENGINE_BETA_URL;
 export const HAS_PLAYWRIGHT = !!config.PLAYWRIGHT_MICROSERVICE_URL;
-export const HAS_PROXY = !!config.PROXY_SERVER;
+export const HAS_PROXY = getPrimaryProxyEndpoints().length > 0;
 
 export const HAS_SEARCH = TEST_PRODUCTION || !!config.SEARXNG_ENDPOINT;
 

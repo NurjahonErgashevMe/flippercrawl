@@ -2,6 +2,7 @@ import { fetch, Agent } from "undici";
 import type { Logger } from "winston";
 import { config } from "../config";
 import {
+  hasPrimaryProxyPool,
   hasProxyFallback,
   resetProxyDispatchers,
   runWithProxySlot,
@@ -12,6 +13,37 @@ const directAgent = new Agent({
   connect: { rejectUnauthorized: true },
 });
 
+function collectErrorMessages(err: unknown): string {
+  const parts: string[] = [];
+  const walk = (e: unknown): void => {
+    if (e == null) return;
+    if (e instanceof Error) {
+      parts.push(e.message);
+      walk((e as { cause?: unknown }).cause);
+    } else {
+      parts.push(String(e));
+    }
+  };
+  walk(err);
+  return parts.join(" | ");
+}
+
+/** HTTP-код ответа прокси на CONNECT (не 200): 407, 522, 502… */
+export function parseProxyTunnelHttpStatus(err: unknown): number | undefined {
+  const m = collectErrorMessages(err).match(
+    /Proxy response \((\d+)\) !== 200 when HTTP Tunneling/i,
+  );
+  if (!m) return undefined;
+  return parseInt(m[1], 10);
+}
+
+/** Имеет смысл перейти на следующий endpoint из PROXY_SERVER_LIST(_FILE). */
+export function shouldRetryFetchWithAlternatePoolEndpoint(
+  err: unknown,
+): boolean {
+  return parseProxyTunnelHttpStatus(err) !== undefined;
+}
+
 let rotationQueue: Promise<void> = Promise.resolve();
 let lastRotationTime = 0;
 
@@ -20,7 +52,7 @@ let lastFallbackRotationTime = 0;
 
 function proxyRotationEnabled(): boolean {
   const url = config.PROXY_ROTATION_URL?.trim();
-  return !!(config.PROXY_SERVER && url);
+  return !!(hasPrimaryProxyPool() && url);
 }
 
 function fallbackProxyRotationEnabled(): boolean {
@@ -36,7 +68,7 @@ function parseRotationStatuses(): number[] {
 
 /** Повторять запрос при этих HTTP-кодах (после сброса / смены IP). */
 function shouldRetryHttpForProxy(status: number): boolean {
-  if (!config.PROXY_SERVER) return false;
+  if (!hasPrimaryProxyPool()) return false;
   return parseRotationStatuses().includes(status);
 }
 
@@ -80,7 +112,7 @@ async function rotatePrimaryProxyAndReset(
   ctx: { reason: string; statusCode?: number },
 ): Promise<void> {
   const rotationUrl = config.PROXY_ROTATION_URL?.trim();
-  if (!rotationUrl || !config.PROXY_SERVER) return;
+  if (!rotationUrl || !hasPrimaryProxyPool()) return;
 
   const cooldown = config.PROXY_ROTATION_COOLDOWN_MS;
   const postDelay = postDelayMs();
@@ -185,10 +217,11 @@ async function recoverAfterProxyTransportFailure(
   err: unknown,
   slot: ProxySlot,
 ): Promise<void> {
-  if (!config.PROXY_SERVER) return;
+  if (!hasPrimaryProxyPool()) return;
 
   log.warn("Proxy: transport error, resetting connections", {
     slot,
+    proxyTunnelHttpStatus: parseProxyTunnelHttpStatus(err),
     error: err instanceof Error ? err.message : String(err),
   });
 
@@ -324,7 +357,7 @@ export async function executeFetchWithProxyRotation(
   log: Logger,
   exec: () => Promise<import("undici").Response>,
 ): Promise<import("undici").Response> {
-  const maxAttempts = config.PROXY_SERVER
+  const maxAttempts = hasPrimaryProxyPool()
     ? config.PROXY_ROTATION_MAX_ATTEMPTS
     : 1;
 
@@ -361,7 +394,7 @@ export async function executeFetchWithProxyRotation(
     } catch (e) {
       lastError = e;
       if (
-        !config.PROXY_SERVER ||
+        !hasPrimaryProxyPool() ||
         !isProxyTransportError(e) ||
         attempt >= maxAttempts - 1
       ) {

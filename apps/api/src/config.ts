@@ -148,6 +148,10 @@ const configSchema = z.object({
 
   // Proxy
   PROXY_SERVER: z.string().optional(),
+  /** Несколько host:port через запятую; приоритет ниже чем PROXY_SERVER_LIST_FILE */
+  PROXY_SERVER_LIST: z.string().optional(),
+  /** Файл: по строке host:port или host:port:user:pass (берём только host:port). cwd — процесс API */
+  PROXY_SERVER_LIST_FILE: z.string().optional(),
   PROXY_USERNAME: z.string().optional(),
   PROXY_PASSWORD: z.string().optional(),
   /** GET URL провайдера для смены IP мобильного прокси (после 403/429 и т.п.) */
@@ -174,6 +178,13 @@ const configSchema = z.object({
   PROXY_PASSWORD_FALLBACK: z.string().optional(),
   /** Опционально: GET для смены IP у резервного провайдера (если появится). Без URL — только сброс соединений + задержка */
   PROXY_FALLBACK_ROTATION_URL: z.string().optional(),
+  /** Сколько разных host:port из пула перебрать при ошибке CONNECT к прокси (522, 502, …) */
+  PROXY_POOL_MAX_ENDPOINT_TRIES: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .default(8),
 
   /** Только эндпоинты scrape (и batch/status); остальные API — 404 */
   API_SCRAPE_ONLY: z.stringbool().optional().default(false),

@@ -58,6 +58,7 @@ async function deriveHTMLFromRawHTML(
     );
   }
 
+  const rawLen = document.rawHtml.length;
   document.html = await htmlTransform(
     document.rawHtml,
     document.metadata.url ??
@@ -65,6 +66,15 @@ async function deriveHTMLFromRawHTML(
       meta.rewrittenUrl ??
       meta.url,
     meta.options,
+  );
+  const htmlLen = document.html?.length ?? 0;
+  meta.logger.info(
+    `[scrape.pipeline] HTML после очистки/нормализации: ${rawLen} → ${htmlLen} симв.`,
+    {
+      phase: "html_cleaned",
+      rawHtmlChars: rawLen,
+      htmlChars: htmlLen,
+    },
   );
   return document;
 }
@@ -120,8 +130,24 @@ async function deriveMarkdownFromHTML(
     }
 
     document.markdown = "```json\n" + document.rawHtml + "\n```";
+    meta.logger.info(
+      `[scrape.pipeline] Markdown из JSON-ответа: ${document.markdown.length} симв.`,
+      {
+        phase: "markdown_from_json",
+        markdownChars: document.markdown.length,
+      },
+    );
     return document;
   }
+
+  const htmlForMd = document.html.length;
+  meta.logger.info(
+    `[scrape.pipeline] Конвертация HTML → Markdown (вход ${htmlForMd} симв.)…`,
+    {
+      phase: "html_to_markdown_start",
+      htmlChars: htmlForMd,
+    },
+  );
 
   // Use scrape ID or crawl ID as request_id for tracing
   const requestId = meta.id || meta.internalOptions.crawlId;
@@ -129,6 +155,14 @@ async function deriveMarkdownFromHTML(
     logger: meta.logger,
     requestId,
   });
+
+  meta.logger.info(
+    `[scrape.pipeline] Markdown готов: ${document.markdown?.length ?? 0} симв.`,
+    {
+      phase: "html_to_markdown_done",
+      markdownChars: document.markdown?.length ?? 0,
+    },
+  );
 
   if (
     meta.options.onlyMainContent === true &&
@@ -152,9 +186,13 @@ async function deriveMarkdownFromHTML(
       requestId,
     });
 
-    meta.logger.info("Fallback to full content extraction completed", {
-      markdownLength: document.markdown?.length || 0,
-    });
+    meta.logger.info(
+      `[scrape.pipeline] Повторная конвертация (полная страница): markdown ${document.markdown?.length ?? 0} симв.`,
+      {
+        phase: "html_to_markdown_fallback",
+        markdownChars: document.markdown?.length ?? 0,
+      },
+    );
   }
 
   return document;

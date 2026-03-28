@@ -1,4 +1,5 @@
 import { config } from "../../../config";
+import { getPrimaryProxyEndpoints } from "../../../scraper/scrapeURL/engines/utils/safeFetch";
 import {
   createTestIdUrl,
   describeIf,
@@ -270,7 +271,7 @@ describe("Scrape tests", () => {
       );
 
       expect(response.markdown?.trim()).toContain(
-        config.PROXY_SERVER!.split("://").slice(-1)[0].split(":")[0],
+        getPrimaryProxyEndpoints()[0]!.split(":")[0],
       );
     },
     scrapeTimeout,
@@ -289,7 +290,7 @@ describe("Scrape tests", () => {
       );
 
       expect(response.markdown?.trim()).toContain(
-        config.PROXY_SERVER!.split("://").slice(-1)[0].split(":")[0],
+        getPrimaryProxyEndpoints()[0]!.split(":")[0],
       );
     },
     scrapeTimeout,

@@ -1,0 +1,5 @@
+# Скопируйте в proxies.txt (рядом в apps/api) и подставьте свои строки из кабинета Decodo.
+# Формат: host:port:user:pass  или  host:port  (логин/пароль тогда в .env)
+#
+# ru.decodo.com:40001:USER:PASS
+# ru.decodo.com:40002:USER:PASS

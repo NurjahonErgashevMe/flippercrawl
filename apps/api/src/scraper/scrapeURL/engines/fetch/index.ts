@@ -1,15 +1,24 @@
 import * as undici from "undici";
+import { config } from "../../../../config";
 import { EngineScrapeResult } from "..";
 import { Meta } from "../..";
 import { SSLError } from "../../error";
 import { specialtyScrapeCheck } from "../utils/specialtyHandler";
 import {
+  getPrimaryProxyEndpoints,
   getSecureDispatcher,
   InsecureConnectionError,
+  primaryProxyPoolIndexForJobId,
+  redactProxyEndpointForLog,
+  runWithPrimaryProxyPoolIndex,
 } from "../utils/safeFetch";
 import { MockState, saveMock } from "../../lib/mock";
 import { TextDecoder } from "util";
-import { executeFetchWithProxyRotation } from "../../../../lib/proxyRotation";
+import {
+  executeFetchWithProxyRotation,
+  parseProxyTunnelHttpStatus,
+  shouldRetryFetchWithAlternatePoolEndpoint,
+} from "../../../../lib/proxyRotation";
 
 export async function scrapeURLWithFetch(
   meta: Meta,
@@ -24,12 +33,14 @@ export async function scrapeURLWithFetch(
     tryCount: 1,
   };
 
-  let response: {
-    url: string;
-    body: string;
-    status: number;
-    headers: [string, string][];
-  };
+  let response:
+    | {
+        url: string;
+        body: string;
+        status: number;
+        headers: [string, string][];
+      }
+    | undefined;
 
   if (meta.mock !== null) {
     const makeRequestTypeId = (
@@ -51,61 +62,141 @@ export async function scrapeURLWithFetch(
       ...matchingMocks[nextI].result,
     };
   } else {
+    const flog = meta.logger.child({ method: "scrapeURLWithFetch" });
+    const endpoints = getPrimaryProxyEndpoints();
+    const poolN = Math.max(1, endpoints.length);
+    const maxRounds =
+      poolN <= 1 ? 1 : Math.min(poolN, config.PROXY_POOL_MAX_ENDPOINT_TRIES);
+    const start = primaryProxyPoolIndexForJobId(meta.id);
+
+    let targetHost = "";
     try {
-      const x = await executeFetchWithProxyRotation(
-        meta.logger.child({ method: "scrapeURLWithFetch" }),
-        () =>
-          undici.fetch(meta.rewrittenUrl ?? meta.url, {
-            dispatcher: getSecureDispatcher(meta.options.skipTlsVerification),
-            redirect: "follow",
-            headers: meta.options.headers,
-            signal: meta.abort.asSignal(),
-          }),
-      );
+      targetHost = new URL(meta.rewrittenUrl ?? meta.url).hostname;
+    } catch {
+      targetHost = "(bad-url)";
+    }
 
-      const buf = Buffer.from(await x.arrayBuffer());
-      let text = buf.toString("utf8");
-      const charset = (text.match(
-        /<meta\b[^>]*charset\s*=\s*["']?([^"'\s\/>]+)/i,
-      ) ?? [])[1];
+    let lastError: unknown;
+    for (let r = 0; r < maxRounds; r++) {
+      const poolIdx = (start + r) % poolN;
+      const proxyHint = redactProxyEndpointForLog(endpoints[poolIdx] ?? "");
       try {
-        if (charset) {
-          text = new TextDecoder(charset.trim()).decode(buf);
+        flog.info(
+          `[scrape.pipeline] Отправка HTTP GET через прокси → ${targetHost} (узел пула ${poolIdx + 1}/${poolN}, ${proxyHint})`,
+          {
+            phase: "fetch_request",
+            targetHost,
+            proxyPoolIndex: poolIdx,
+            proxyPoolSize: poolN,
+            proxyEndpoint: proxyHint,
+          },
+        );
+
+        const x = await runWithPrimaryProxyPoolIndex(poolIdx, () =>
+          executeFetchWithProxyRotation(flog, () =>
+            undici.fetch(meta.rewrittenUrl ?? meta.url, {
+              dispatcher: getSecureDispatcher(meta.options.skipTlsVerification),
+              redirect: "follow",
+              headers: meta.options.headers,
+              signal: meta.abort.asSignal(),
+            }),
+          ),
+        );
+
+        const buf = Buffer.from(await x.arrayBuffer());
+        let text = buf.toString("utf8");
+        const charset = (text.match(
+          /<meta\b[^>]*charset\s*=\s*["']?([^"'\s\/>]+)/i,
+        ) ?? [])[1];
+        try {
+          if (charset) {
+            text = new TextDecoder(charset.trim()).decode(buf);
+          }
+        } catch (error) {
+          meta.logger.warn("Failed to re-parse with correct charset", {
+            charset,
+            error,
+          });
         }
+
+        const finalUrlHost = (() => {
+          try {
+            return new URL(x.url).hostname;
+          } catch {
+            return "";
+          }
+        })();
+
+        flog.info(
+          `[scrape.pipeline] Ответ страницы получен: HTTP ${x.status}, HTML/тело ${text.length} симв., финальный хост ${finalUrlHost || "—"}`,
+          {
+            phase: "fetch_ok",
+            targetHost,
+            proxyPoolIndex: poolIdx,
+            proxyPoolSize: poolN,
+            proxyEndpoint: proxyHint,
+            httpStatus: x.status,
+            responseBodyChars: text.length,
+            finalUrlHost,
+          },
+        );
+
+        response = {
+          url: x.url,
+          body: text,
+          status: x.status,
+          headers: [...x.headers],
+        };
+
+        if (meta.mock === null) {
+          await saveMock(mockOptions, response);
+        }
+        break;
       } catch (error) {
-        meta.logger.warn("Failed to re-parse with correct charset", {
-          charset,
-          error,
-        });
-      }
-
-      response = {
-        url: x.url,
-        body: text,
-        status: x.status,
-        headers: [...x.headers],
-      };
-
-      if (meta.mock === null) {
-        await saveMock(mockOptions, response);
-      }
-    } catch (error) {
-      if (
-        error instanceof TypeError &&
-        error.cause instanceof InsecureConnectionError
-      ) {
-        throw error.cause;
-      } else if (
-        error instanceof Error &&
-        error.message === "fetch failed" &&
-        error.cause &&
-        (error.cause as any).code === "CERT_HAS_EXPIRED"
-      ) {
-        throw new SSLError(meta.options.skipTlsVerification);
-      } else {
-        throw error;
+        lastError = error;
+        const tryNextEndpoint =
+          poolN > 1 &&
+          r < maxRounds - 1 &&
+          shouldRetryFetchWithAlternatePoolEndpoint(error);
+        if (tryNextEndpoint) {
+          const tun = parseProxyTunnelHttpStatus(error);
+          flog.warn(
+            `[scrape.pipeline] Ошибка туннеля прокси${tun != null ? ` (HTTP ${tun})` : ""} — пробуем следующий узел пула (${(poolIdx + 1) % poolN})`,
+            {
+              phase: "fetch_retry_next_proxy",
+              targetHost,
+              poolIndex: poolIdx,
+              nextPoolIndex: (poolIdx + 1) % poolN,
+              proxyTunnelHttpStatus: tun,
+            },
+          );
+          continue;
+        }
+        if (
+          error instanceof TypeError &&
+          error.cause instanceof InsecureConnectionError
+        ) {
+          throw error.cause;
+        } else if (
+          error instanceof Error &&
+          error.message === "fetch failed" &&
+          error.cause &&
+          (error.cause as any).code === "CERT_HAS_EXPIRED"
+        ) {
+          throw new SSLError(meta.options.skipTlsVerification);
+        } else {
+          throw error;
+        }
       }
     }
+
+    if (response === undefined) {
+      throw lastError ?? new Error("fetch: no response after proxy attempts");
+    }
+  }
+
+  if (!response) {
+    throw new Error("fetch: internal error, response unset");
   }
 
   await specialtyScrapeCheck(

@@ -2,6 +2,7 @@
 /node_modules/
 /dist/
 .env
+proxies.txt
 *.csv
 dump.rdb
 /mongo-data
