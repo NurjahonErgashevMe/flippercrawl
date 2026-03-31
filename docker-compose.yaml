@@ -52,8 +52,8 @@ services:
       - ./apps/api/proxies.txt:/app/proxies.txt:ro
     command: node dist/src/harness.js --start-docker
     cpus: 6.0
-    mem_limit: 10G
-    memswap_limit: 10G
+    mem_limit: 14G
+    memswap_limit: 14G
 
   redis:
     image: redis:alpine

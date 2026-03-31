@@ -40,7 +40,7 @@ export function runWithPrimaryProxyPoolIndex<T>(index: number, fn: () => T): T {
 }
 
 // ─── Proxy pool entry ────────────────────────────────────────────────
-export interface ProxyEntry {
+interface ProxyEntry {
   hostPort: string;
   username?: string;
   password?: string;
@@ -142,10 +142,6 @@ export function redactProxyEndpointForLog(hostPort: string): string {
   }
 }
 
-export function resetPrimaryProxyEndpointsCache(): void {
-  cachedPool = null;
-}
-
 export function primaryProxyPoolIndexForJobId(jobId: string): number {
   const pool = loadPrimaryPool();
   if (pool.length <= 1) return 0;
@@ -241,9 +237,14 @@ function createBaseAgentForHostPort(
   skipTlsVerification: boolean,
   auth: { username?: string; password?: string },
 ): undici.Dispatcher {
+  const connectMs = config.SCRAPE_FETCH_CONNECT_TIMEOUT_MS;
+
   if (!hostPort) {
     return new undici.Agent({
-      connect: { rejectUnauthorized: !skipTlsVerification },
+      connect: {
+        rejectUnauthorized: !skipTlsVerification,
+        timeout: connectMs,
+      },
     }).compose(interceptors.redirect({ maxRedirections: 5000 }));
   }
 
@@ -254,14 +255,19 @@ function createBaseAgentForHostPort(
     const safe = token
       ? `${auth.username ?? "?"}:${(auth.password ?? "").slice(0, 4)}***`
       : "(no auth)";
-    console.log(`[safeFetch] Creating ProxyAgent: uri=${uri}, auth=${safe}`);
+    console.log(
+      `[safeFetch] Creating ProxyAgent: uri=${uri}, auth=${safe}, connectTimeoutMs=${connectMs}`,
+    );
   }
 
   const baseAgent = new undici.ProxyAgent({
     uri,
     ...(token ? { token } : {}),
+    connectTimeout: connectMs,
+    proxyTls: { timeout: connectMs },
     requestTls: {
       rejectUnauthorized: !skipTlsVerification,
+      timeout: connectMs,
     },
   });
 

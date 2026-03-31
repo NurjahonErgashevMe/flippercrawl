@@ -7,6 +7,7 @@ import { specialtyScrapeCheck } from "../utils/specialtyHandler";
 import {
   getPrimaryProxyEndpoints,
   getSecureDispatcher,
+  hasPrimaryProxyPool,
   InsecureConnectionError,
   primaryProxyPoolIndexForJobId,
   redactProxyEndpointForLog,
@@ -216,6 +217,22 @@ export async function scrapeURLWithFetch(
   };
 }
 
-export function fetchMaxReasonableTime(meta: Meta): number {
-  return 15000;
+/**
+ * Время на движок fetch до waterfall: при прокси и ретраях должно покрывать
+ * (узлы пула × PROXY_ROTATION_MAX_ATTEMPTS × connect + паузы), иначе обрыв по 15s при живых ретраях.
+ */
+export function fetchMaxReasonableTime(_meta: Meta): number {
+  if (!hasPrimaryProxyPool()) {
+    return 15_000;
+  }
+  const poolN = Math.max(1, getPrimaryProxyEndpoints().length);
+  const maxRounds =
+    poolN <= 1 ? 1 : Math.min(poolN, config.PROXY_POOL_MAX_ENDPOINT_TRIES);
+  const attempts = config.PROXY_ROTATION_MAX_ATTEMPTS;
+  const perAttemptMs =
+    config.SCRAPE_FETCH_CONNECT_TIMEOUT_MS +
+    config.PROXY_ROTATION_POST_DELAY_MS +
+    5_000;
+  const estimated = maxRounds * attempts * perAttemptMs + 25_000;
+  return Math.min(600_000, Math.max(90_000, estimated));
 }

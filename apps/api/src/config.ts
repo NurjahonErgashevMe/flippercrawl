@@ -185,6 +185,15 @@ const configSchema = z.object({
     .min(1)
     .max(100)
     .default(8),
+  /**
+   * Таймаут connect к origin через undici (мс). Дефолт undici ~10s — часто мало для прокси → UND_ERR_CONNECT_TIMEOUT.
+   */
+  SCRAPE_FETCH_CONNECT_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(5000)
+    .max(180000)
+    .default(45000),
 
   /** Только эндпоинты scrape (и batch/status); остальные API — 404 */
   API_SCRAPE_ONLY: z.stringbool().optional().default(false),

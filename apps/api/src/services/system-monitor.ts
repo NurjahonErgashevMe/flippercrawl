@@ -40,11 +40,44 @@ class SystemMonitor {
     return SystemMonitor.instance;
   }
 
+  /**
+   * Доля занятой памяти: в Docker/K8s (cgroup v2) — от лимита контейнера/пода,
+   * иначе — от всей машины (systeminformation). Раньше в Docker без K8s считалась
+   * только память хоста → ложный «перегруз» при MAX_RAM.
+   */
   public async checkMemoryUsage() {
-    if (IS_KUBERNETES) {
-      return this._checkMemoryUsageKubernetes();
+    const now = Date.now();
+    if (
+      this.memoryUsageCache !== null &&
+      now - this.lastMemoryCheck < CACHE_DURATION
+    ) {
+      return this.memoryUsageCache;
     }
-    return this._checkMemoryUsage();
+
+    let usedMemoryPercentage: number;
+    try {
+      const currentMemoryUsage = this.readMemoryCurrent();
+      const memoryLimit = this.readMemoryMax();
+      if (memoryLimit === Infinity || memoryLimit <= 0) {
+        const totalMemory = os.totalmem();
+        usedMemoryPercentage = currentMemoryUsage / totalMemory;
+      } else {
+        usedMemoryPercentage = currentMemoryUsage / memoryLimit;
+      }
+    } catch (error) {
+      logger.warn(
+        `Memory: cgroup v2 недоступен, используем RAM хоста: ${error instanceof Error ? error.message : error}`,
+      );
+      const memoryData = await si.mem();
+      const totalMemory = memoryData.total;
+      const availableMemory = memoryData.available;
+      usedMemoryPercentage = (totalMemory - availableMemory) / totalMemory;
+    }
+
+    this.memoryUsageCache = usedMemoryPercentage;
+    this.lastMemoryCheck = now;
+
+    return usedMemoryPercentage;
   }
 
   private readMemoryCurrent(): number {
@@ -58,50 +91,6 @@ class SystemMonitor {
       return Infinity;
     }
     return parseInt(data, 10);
-  }
-  private async _checkMemoryUsageKubernetes() {
-    try {
-      const currentMemoryUsage = this.readMemoryCurrent();
-      const memoryLimit = this.readMemoryMax();
-
-      let memoryUsagePercentage: number;
-
-      if (memoryLimit === Infinity) {
-        // No memory limit set; use total system memory
-        const totalMemory = os.totalmem();
-        memoryUsagePercentage = currentMemoryUsage / totalMemory;
-      } else {
-        memoryUsagePercentage = currentMemoryUsage / memoryLimit;
-      }
-
-      // console.log("Memory usage:", memoryUsagePercentage);
-
-      return memoryUsagePercentage;
-    } catch (error) {
-      logger.error(`Error calculating memory usage: ${error}`);
-      return 0; // Fallback to 0% usage
-    }
-  }
-
-  private async _checkMemoryUsage() {
-    const now = Date.now();
-    if (
-      this.memoryUsageCache !== null &&
-      now - this.lastMemoryCheck < CACHE_DURATION
-    ) {
-      return this.memoryUsageCache;
-    }
-
-    const memoryData = await si.mem();
-    const totalMemory = memoryData.total;
-    const availableMemory = memoryData.available;
-    const usedMemory = totalMemory - availableMemory;
-    const usedMemoryPercentage = usedMemory / totalMemory;
-
-    this.memoryUsageCache = usedMemoryPercentage;
-    this.lastMemoryCheck = now;
-
-    return usedMemoryPercentage;
   }
 
   public async checkCpuUsage() {
