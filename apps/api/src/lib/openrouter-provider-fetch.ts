@@ -4,11 +4,8 @@
  * @see docs/PROVIDER_ROUTING.md
  */
 export const OPENROUTER_DEFAULT_PROVIDER = {
-  order: ["deepinfra"] as const,
-  quantizations: ["bf16"] as const,
-  allow_fallbacks: false,
-  /** Только провайдеры, поддерживающие все параметры запроса (в т.ч. structured outputs). */
-  require_parameters: true,
+  order: ["alibaba"] as const,
+  allow_fallbacks: true,
 } as const;
 
 export function withOpenRouterProviderRouting(

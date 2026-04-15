@@ -177,6 +177,14 @@ function isOpenRouterLanguageModel(model: unknown): boolean {
   );
 }
 
+function openRouterSupportsStructuredOutputs(modelId: string): boolean {
+  // OpenRouter compatibility varies by provider. For qwen/qwen-turbo, OpenRouter can return:
+  // "No endpoints found that can handle the requested parameters" when `response_format: json_schema` is used.
+  const m = modelId.trim().toLowerCase();
+  if (m === "qwen/qwen-turbo") return false;
+  return true;
+}
+
 function normalizeSchema(x: any): any {
   if (typeof x !== "object" || x === null) return x;
 
@@ -774,7 +782,9 @@ export async function generateCompletions({
       prompt: prompt,
       ...(isOpenRouterLanguageModel(currentModel)
         ? {
-            maxOutputTokens: 1024,
+            // 1024 часто режет длинные JSON-объекты (finish_reason=length) → AI_JSONParseError/NoObjectGenerated.
+            // Для карточек ЦИАН с большим description/price_history нужен запас.
+            maxOutputTokens: 2048,
             ...(modelId.startsWith("gpt-5")
               ? { temperature: 1 as const }
               : { temperature: 0.1 as const }),
@@ -798,9 +808,10 @@ export async function generateCompletions({
         },
         openai: {
           strictJsonSchema: true,
-          ...(isOpenRouterLanguageModel(currentModel) && {
-            structuredOutputs: true,
-          }),
+          ...(isOpenRouterLanguageModel(currentModel) &&
+            openRouterSupportsStructuredOutputs(modelId) && {
+              structuredOutputs: true,
+            }),
         },
       },
       system: options.systemPrompt,

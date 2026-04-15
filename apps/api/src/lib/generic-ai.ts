@@ -65,7 +65,15 @@ export function getModel(name: string, provider: Provider = defaultProvider) {
   if (name === "gemini-2.5-pro") {
     name = "gemini-2.5-pro";
   }
-  const modelName = config.MODEL_NAME || name;
+  // MODEL_NAME исторически был глобальным оверрайдом и мог ломать вызовы с явным provider
+  // (например, когда defaultProvider=openrouter, но для части функций используется provider="google").
+  // Поэтому применяем MODEL_NAME только для defaultProvider, а для OpenRouter даём отдельный оверрайд.
+  const baseModelName =
+    (provider === defaultProvider ? config.MODEL_NAME : undefined) || name;
+  const modelName =
+    provider === "openrouter"
+      ? config.OPENROUTER_MODEL_NAME?.trim() || baseModelName
+      : baseModelName;
   // o3-mini returns empty text via the Responses API — force Chat Completions
   if (provider === "openai" && modelName.startsWith("o3-mini")) {
     return providerList.openai.chat(modelName);
