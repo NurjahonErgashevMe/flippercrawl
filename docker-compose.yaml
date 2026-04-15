@@ -40,6 +40,8 @@ services:
       POSTGRES_HOST: nuq-postgres
       # Фиксированный путь в контейнере (не зависит от cwd); файл монтируется ниже
       PROXY_SERVER_LIST_FILE: /app/proxies.txt
+      # V8 heap: 128 МБ на процесс — ограничивает GC-спайки для 25 воркеров
+      NODE_OPTIONS: "--max-old-space-size=128"
     depends_on:
       redis:
         condition: service_started
@@ -52,8 +54,8 @@ services:
       - ./apps/api/proxies.txt:/app/proxies.txt:ro
     command: node dist/src/harness.js --start-docker
     cpus: 6.0
-    mem_limit: 14G
-    memswap_limit: 14G
+    mem_limit: 5632M
+    memswap_limit: 5632M
 
   redis:
     image: redis:alpine
@@ -62,7 +64,9 @@ services:
     # Снаружи по умолчанию 6380 — чтобы не конфликтовать с чужим Redis на 6379. Внутри сети compose всё равно redis:6379
     ports:
       - "${REDIS_HOST_PORT:-6380}:6379"
-    command: redis-server --bind 0.0.0.0
+    command: redis-server --bind 0.0.0.0 --maxmemory 256mb --maxmemory-policy allkeys-lru --save ""
+    mem_limit: 384M
+    memswap_limit: 384M
     logging:
       driver: "json-file"
       options:
@@ -77,6 +81,10 @@ services:
     ports:
       - "5672:5672"
     command: rabbitmq-server
+    mem_limit: 384M
+    memswap_limit: 384M
+    environment:
+      RABBITMQ_VM_MEMORY_HIGH_WATERMARK: "0.7"
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
       interval: 5s
@@ -100,6 +108,14 @@ services:
       - backend
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
+    mem_limit: 512M
+    memswap_limit: 512M
+    command: >
+      postgres
+        -c shared_buffers=128MB
+        -c work_mem=4MB
+        -c maintenance_work_mem=64MB
+        -c effective_cache_size=256MB
     logging:
       driver: "json-file"
       options:
