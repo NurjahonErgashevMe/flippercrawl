@@ -138,7 +138,7 @@ const configSchema = z.object({
   NUQ_WAIT_MODE: z.string().optional(),
 
   // Harness Configuration
-  HARNESS_STARTUP_TIMEOUT_MS: z.coerce.number().default(60000),
+  HARNESS_STARTUP_TIMEOUT_MS: z.coerce.number().default(120000),
 
   // Job & Lock Management
   JOB_LOCK_EXTEND_INTERVAL: z.coerce.number().default(10000),

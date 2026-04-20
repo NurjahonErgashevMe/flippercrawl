@@ -40,8 +40,6 @@ services:
       POSTGRES_HOST: nuq-postgres
       # Фиксированный путь в контейнере (не зависит от cwd); файл монтируется ниже
       PROXY_SERVER_LIST_FILE: /app/proxies.txt
-      # V8 heap: 128 МБ на процесс — ограничивает GC-спайки для 25 воркеров
-      NODE_OPTIONS: "--max-old-space-size=128"
     depends_on:
       redis:
         condition: service_started
@@ -53,7 +51,7 @@ services:
       # Реальный пул портов Decodo; не кладём секреты в слои образа (.dockerignore → proxies.txt)
       - ./apps/api/proxies.txt:/app/proxies.txt:ro
     command: node dist/src/harness.js --start-docker
-    cpus: 6.0
+    cpus: 1.7
     mem_limit: 5632M
     memswap_limit: 5632M
 
@@ -80,11 +78,10 @@ services:
       - backend
     ports:
       - "5672:5672"
-    command: rabbitmq-server
+    command: >
+      sh -c "echo 'vm_memory_high_watermark.relative = 0.7' > /etc/rabbitmq/rabbitmq.conf && exec rabbitmq-server"
     mem_limit: 384M
     memswap_limit: 384M
-    environment:
-      RABBITMQ_VM_MEMORY_HIGH_WATERMARK: "0.7"
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
       interval: 5s
@@ -107,7 +104,7 @@ services:
     networks:
       - backend
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${POSTGRES_PORT:-5433}:5433"
     mem_limit: 512M
     memswap_limit: 512M
     command: >

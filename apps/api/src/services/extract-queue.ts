@@ -63,6 +63,16 @@ async function getChannel(): Promise<amqp.Channel> {
     _logger.error("Extract queue connection error", { error: err });
   });
 
+  // Без этого обработчика 'error' на канале при обрыве TCP amqplib валит процесс
+  channel.on("error", err => {
+    _logger.error("Extract queue channel error", { error: err });
+  });
+
+  channel.on("close", () => {
+    _logger.warn("Extract queue channel closed");
+    channel = null;
+  });
+
   return channel;
 }
 

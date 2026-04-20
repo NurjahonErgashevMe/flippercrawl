@@ -150,6 +150,22 @@ class NuQ<JobData = any, JobReturnValue = any> {
       this.listener.connection.on("close", onClose);
       this.listener.channel.on("close", onClose);
 
+      // Важно: без слушателей 'error' amqplib при ECONNRESET кидает
+      // "Unhandled 'error' event on ChannelModel instance" и роняет процесс
+      // (см. apps/api/src/services/worker/nuq-worker.ts и harness fail-fast).
+      this.listener.connection.on("error", err => {
+        logger.error("NuQ listener connection error", {
+          module: "nuq/rabbitmq",
+          err,
+        });
+      });
+      this.listener.channel.on("error", err => {
+        logger.error("NuQ listener channel error", {
+          module: "nuq/rabbitmq",
+          err,
+        });
+      });
+
       await this.listener.channel.consume(
         this.listener.queue,
         (msg => {

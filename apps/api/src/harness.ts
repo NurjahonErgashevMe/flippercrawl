@@ -797,19 +797,9 @@ async function startServices(command?: string[]): Promise<Services> {
     },
   );
 
-  const nuqWorkers = Array.from({ length: NUQ_WORKER_COUNT }, (_, i) =>
-    execForward(
-      `nuq-worker-${i}`,
-      process.argv[2] === "--start-docker"
-        ? "node dist/src/services/worker/nuq-worker.js"
-        : "pnpm nuq-worker:production",
-      {
-        NUQ_WORKER_PORT: String(NUQ_WORKER_START_PORT + i),
-        NUQ_REDUCE_NOISE: "true",
-        NUQ_POD_NAME: `nuq-worker-${i}`,
-      },
-    ),
-  );
+  // NUQ workers are spawned later (after API is ready) to avoid starving the
+  // API process of CPU/RAM on low-memory servers. See spawnNuqWorkers().
+  const nuqWorkers: ProcessResult[] = [];
 
   const nuqPrefetchWorker = execForward(
     "nuq-prefetch-worker",
@@ -961,6 +951,7 @@ async function runDevMode(): Promise<void> {
           await waitForPort(Number(PORT), "localhost", {
             signal: restartSignal?.signal,
           });
+          await spawnNuqWorkers(currentServices);
         } catch (e) {
           if (e?.name !== "AbortError") throw e;
           if (shuttingDown) return;
@@ -1021,11 +1012,49 @@ async function runDevMode(): Promise<void> {
   watch.kill();
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function spawnNuqWorkers(services: Services): Promise<void> {
+  const BATCH = 5;
+  const DELAY_MS = 2000;
+
+  for (let i = 0; i < NUQ_WORKER_COUNT; i += BATCH) {
+    const end = Math.min(i + BATCH, NUQ_WORKER_COUNT);
+    logger.info(`Spawning NUQ workers ${i}–${end - 1} of ${NUQ_WORKER_COUNT}`);
+
+    for (let j = i; j < end; j++) {
+      services.nuqWorkers.push(
+        execForward(
+          `nuq-worker-${j}`,
+          process.argv[2] === "--start-docker"
+            ? "node dist/src/services/worker/nuq-worker.js"
+            : "pnpm nuq-worker:production",
+          {
+            NUQ_WORKER_PORT: String(NUQ_WORKER_START_PORT + j),
+            NUQ_REDUCE_NOISE: "true",
+            NUQ_POD_NAME: `nuq-worker-${j}`,
+            NODE_OPTIONS: "--max-old-space-size=128",
+          },
+        ),
+      );
+    }
+
+    if (end < NUQ_WORKER_COUNT) {
+      await sleep(DELAY_MS);
+    }
+  }
+}
+
 async function runProductionMode(command: string[]): Promise<void> {
   const services = await startServices(command);
 
   logger.info(`Waiting for API on localhost:${PORT}`);
   await waitForPort(Number(PORT), "localhost");
+
+  logger.info("API is ready, spawning NUQ workers...");
+  await spawnNuqWorkers(services);
 
   await waitForTermination(services);
 }
