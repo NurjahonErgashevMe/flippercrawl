@@ -6,6 +6,10 @@ x-common-service: &common-service
   # image: ghcr.io/firecrawl/firecrawl
   build: apps/api
 
+  # Чтобы после OOM/ребута/SIGTERM контейнер автоматически поднимался,
+  # а не оставлял весь стек лежать. См. инцидент 2026-04-20 (OOM beam.smp).
+  restart: unless-stopped
+
   ulimits:
     nofile:
       soft: 65535
@@ -57,6 +61,7 @@ services:
 
   redis:
     image: redis:alpine
+    restart: unless-stopped
     networks:
       - backend
     # Снаружи по умолчанию 6380 — чтобы не конфликтовать с чужим Redis на 6379. Внутри сети compose всё равно redis:6379
@@ -74,14 +79,18 @@ services:
 
   rabbitmq:
     image: rabbitmq:3-management
+    restart: unless-stopped
     networks:
       - backend
     ports:
       - "5672:5672"
+    # 384M + watermark 0.7 оказалось мало: beam.smp упёрся в cgroup и его убил OOM.
+    # Поднимаем лимит и watermark, чтобы RabbitMQ успевал блокировать паблишеров
+    # вместо «тихой» смерти контейнера.
     command: >
-      sh -c "echo 'vm_memory_high_watermark.relative = 0.7' > /etc/rabbitmq/rabbitmq.conf && exec rabbitmq-server"
-    mem_limit: 384M
-    memswap_limit: 384M
+      sh -c "echo 'vm_memory_high_watermark.relative = 0.6' > /etc/rabbitmq/rabbitmq.conf && exec rabbitmq-server"
+    mem_limit: 1024M
+    memswap_limit: 1024M
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
       interval: 5s
@@ -97,6 +106,7 @@ services:
 
   nuq-postgres:
     build: apps/nuq-postgres
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
