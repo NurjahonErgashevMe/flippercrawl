@@ -335,16 +335,25 @@ export async function extractData({
     }
   }
 
-  const { schemaToUse } = prepareSmartScrapeSchema(schema, logger, isSingleUrl);
+  const schemaToUse = useAgent
+    ? prepareSmartScrapeSchema(schema, logger, isSingleUrl).schemaToUse
+    : schema;
+
+  if (useAgent) {
+    logger.info("Wrapped schema with SmartScrape fields", { schemaToUse });
+  } else {
+    logger.info("Using user schema directly (SmartScrape wrapper skipped)", {
+      propertyCount: schema?.properties
+        ? Object.keys(schema.properties).length
+        : 0,
+    });
+  }
+
   const extractOptionsNewSchema = {
     ...extractOptions,
     options: { ...extractOptions.options, schema: schemaToUse },
+    userSchema: schema,
   };
-  // console.log("schema", schema);
-  // console.log("schemaToUse", schemaToUse);
-  logger.info("Generated schema from prompt", {
-    schemaToUse,
-  });
 
   let extract: any,
     warning: string | undefined,
@@ -381,7 +390,9 @@ export async function extractData({
     // console.log("failed during extractSmartScrape.ts:generateCompletions", error);
   }
 
-  let extractedData = extract?.extractedData;
+  let extractedData = useAgent
+    ? extract?.extractedData
+    : (extract?.extractedData ?? extract);
 
   // console.log("shouldUseSmartscrape", extract?.shouldUseSmartscrape);
   // console.log("smartscrape_reasoning", extract?.smartscrape_reasoning);

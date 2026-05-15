@@ -156,6 +156,24 @@ export function hasPrimaryProxyPool(): boolean {
   return loadPrimaryPool().length > 0;
 }
 
+/** Full proxy URL for curl-impersonate `-x` (http://user:pass@host:port). */
+export function buildProxyUrlForPoolIndex(index: number): string | undefined {
+  const pool = loadPrimaryPool();
+  if (pool.length === 0) return undefined;
+  const idx = ((index % pool.length) + pool.length) % pool.length;
+  const entry = pool[idx];
+  const auth = authForPoolEntry(entry);
+  const base = entry.hostPort.includes("://")
+    ? entry.hostPort
+    : `http://${entry.hostPort}`;
+  const u = new URL(base);
+  if (auth.username) {
+    u.username = encodeURIComponent(auth.username);
+    u.password = encodeURIComponent(auth.password ?? "");
+  }
+  return u.toString();
+}
+
 export function hasProxyFallback(): boolean {
   return hasPrimaryProxyPool() && !!config.PROXY_SERVER_FALLBACK?.trim();
 }

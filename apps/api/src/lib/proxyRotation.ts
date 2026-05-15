@@ -41,7 +41,8 @@ export function parseProxyTunnelHttpStatus(err: unknown): number | undefined {
 export function shouldRetryFetchWithAlternatePoolEndpoint(
   err: unknown,
 ): boolean {
-  return parseProxyTunnelHttpStatus(err) !== undefined;
+  if (parseProxyTunnelHttpStatus(err) !== undefined) return true;
+  return isProxyTransportError(err);
 }
 
 let rotationQueue: Promise<void> = Promise.resolve();

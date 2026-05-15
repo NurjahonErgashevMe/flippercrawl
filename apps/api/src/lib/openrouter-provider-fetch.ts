@@ -4,7 +4,7 @@
  * @see docs/PROVIDER_ROUTING.md
  */
 export const OPENROUTER_DEFAULT_PROVIDER = {
-  order: ["alibaba"] as const,
+  order: ["cohere"] as const,
   allow_fallbacks: true,
 } as const;
 

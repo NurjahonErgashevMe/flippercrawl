@@ -1019,6 +1019,13 @@ function sleep(ms: number): Promise<void> {
 async function spawnNuqWorkers(services: Services): Promise<void> {
   const BATCH = 5;
   const DELAY_MS = 2000;
+  const parsedOldSpaceMb = Number(
+    process.env.NUQ_WORKER_MAX_OLD_SPACE_MB ?? "192",
+  );
+  const oldSpaceMb =
+    Number.isFinite(parsedOldSpaceMb) && parsedOldSpaceMb > 0
+      ? Math.floor(parsedOldSpaceMb)
+      : 192;
 
   for (let i = 0; i < NUQ_WORKER_COUNT; i += BATCH) {
     const end = Math.min(i + BATCH, NUQ_WORKER_COUNT);
@@ -1035,7 +1042,7 @@ async function spawnNuqWorkers(services: Services): Promise<void> {
             NUQ_WORKER_PORT: String(NUQ_WORKER_START_PORT + j),
             NUQ_REDUCE_NOISE: "true",
             NUQ_POD_NAME: `nuq-worker-${j}`,
-            NODE_OPTIONS: "--max-old-space-size=128",
+            NODE_OPTIONS: `--max-old-space-size=${oldSpaceMb}`,
           },
         ),
       );

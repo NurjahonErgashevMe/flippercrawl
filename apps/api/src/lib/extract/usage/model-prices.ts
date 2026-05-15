@@ -8642,6 +8642,18 @@ export const modelPrices = {
     source: "https://docs.cohere.com/v2/docs/command-r7b",
     supports_tool_choice: true,
   },
+  "cohere/command-r7b-12-2024": {
+    max_tokens: 4096,
+    max_input_tokens: 128000,
+    max_output_tokens: 4096,
+    input_cost_per_token: 1.5e-7,
+    output_cost_per_token: 3.75e-8,
+    litellm_provider: "cohere_chat",
+    mode: "chat",
+    supports_function_calling: true,
+    source: "https://docs.cohere.com/v2/docs/command-r7b",
+    supports_tool_choice: true,
+  },
   "rerank-v3.5": {
     max_tokens: 4096,
     max_input_tokens: 4096,

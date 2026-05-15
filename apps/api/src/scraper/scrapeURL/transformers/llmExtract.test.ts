@@ -1,6 +1,13 @@
-import { removeDefaultProperty } from "./llmExtract";
-import { trimToTokenLimit } from "./llmExtract";
-import { performSummary } from "./llmExtract";
+import {
+  listMissingSchemaFields,
+  removeDefaultProperty,
+  sanitizeJsonStringLiterals,
+  stripMarkdownJsonFences,
+  tryParseLlmJsonObject,
+  trimToTokenLimit,
+  unwrapSmartScrapeExtract,
+  performSummary,
+} from "./llmExtract";
 import { encoding_for_model } from "@dqbd/tiktoken";
 
 jest.mock("@dqbd/tiktoken", () => ({
@@ -319,5 +326,67 @@ describe("performSummary", () => {
     expect(result.warning).toContain(
       "Summary generation was skipped because the markdown content is empty",
     );
+  });
+});
+
+describe("LLM JSON recovery helpers", () => {
+  it("stripMarkdownJsonFences removes opening fence without closing fence", () => {
+    const raw = '```json\n{"a":1,"b":2';
+    expect(stripMarkdownJsonFences(raw)).toBe('{"a":1,"b":2');
+  });
+
+  it("tryParseLlmJsonObject parses fenced JSON", () => {
+    const raw = '```json\n{"extractedData":{"price":1}}\n```';
+    expect(tryParseLlmJsonObject(raw)).toEqual({
+      extractedData: { price: 1 },
+    });
+  });
+
+  it("sanitizeJsonStringLiterals escapes raw newlines in strings", () => {
+    const broken = '{"x":"line1\nline2"}';
+    const fixed = sanitizeJsonStringLiterals(broken);
+    expect(JSON.parse(fixed)).toEqual({ x: "line1\nline2" });
+  });
+
+  it("tryParseLlmJsonObject recovers truncated object with useful fields", () => {
+    const truncated =
+      '```json\n{"extractedData":{"cian_id":"1","price":100,"title":"flat"';
+    const parsed = tryParseLlmJsonObject(truncated) as {
+      extractedData?: { cian_id?: string; price?: number };
+    };
+    expect(parsed?.extractedData?.cian_id).toBe("1");
+    expect(parsed?.extractedData?.price).toBe(100);
+  });
+});
+
+describe("schema completeness helpers", () => {
+  const cianSchema = {
+    type: "object",
+    properties: {
+      cian_id: { type: "string" },
+      price: { type: "integer" },
+      area: { type: "number" },
+      title: { type: "string" },
+    },
+    required: ["price", "area", "cian_id"],
+  };
+
+  it("unwrapSmartScrapeExtract returns inner object", () => {
+    expect(
+      unwrapSmartScrapeExtract({
+        extractedData: { price: 1 },
+        shouldUseSmartscrape: false,
+      }),
+    ).toEqual({ price: 1 });
+  });
+
+  it("listMissingSchemaFields lists undefined keys only", () => {
+    expect(
+      listMissingSchemaFields(cianSchema, {
+        cian_id: "1",
+        price: 2,
+        title: "x",
+      }),
+    ).toEqual(["area"]);
   });
 });

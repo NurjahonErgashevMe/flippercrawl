@@ -22,6 +22,7 @@ import { z } from "zod";
 import fs from "fs/promises";
 import Ajv from "ajv";
 import { extractData } from "../lib/extractSmartScrape";
+import { normalizeCianListingExtract } from "./cianExtractNormalize";
 import { CostTracking } from "../../../lib/cost-tracking";
 import { isAgentExtractModelValid } from "../../../controllers/v1/types";
 import { hasFormatOfType } from "../../../lib/format-utils";
@@ -134,10 +135,132 @@ function extractFirstJsonObjectString(s: string): string | null {
   return null;
 }
 
-/** GLM / reasoning-модели через OpenRouter отдают структурированный JSON в `message.reasoning`, `content` = null — generateObject не видит объект. */
-function tryRecoverObjectFromReasoningChannel(
-  error: NoObjectGeneratedError,
-): unknown | null {
+/** Убирает ```json / ``` обёртки (в т.ч. без закрывающего fence при обрыве ответа). */
+export function stripMarkdownJsonFences(text: string): string {
+  let s = text.trim();
+  if (s.startsWith("```")) {
+    const firstLineEnd = s.indexOf("\n");
+    if (firstLineEnd !== -1) {
+      s = s.slice(firstLineEnd + 1);
+    } else {
+      s = s.replace(/^```(?:json)?/i, "").trim();
+    }
+  }
+  const closeIdx = s.lastIndexOf("```");
+  if (closeIdx !== -1) {
+    s = s.slice(0, closeIdx).trim();
+  }
+  return s.trim();
+}
+
+/** Экранирует сырой control-char внутри JSON-строк (частая ошибка Cohere/OpenRouter). */
+export function sanitizeJsonStringLiterals(json: string): string {
+  let result = "";
+  let inString = false;
+  let escape = false;
+  for (let i = 0; i < json.length; i++) {
+    const c = json[i];
+    if (escape) {
+      result += c;
+      escape = false;
+      continue;
+    }
+    if (c === "\\" && inString) {
+      result += c;
+      escape = true;
+      continue;
+    }
+    if (c === '"') {
+      inString = !inString;
+      result += c;
+      continue;
+    }
+    if (inString) {
+      const code = c.charCodeAt(0);
+      if (code < 0x20) {
+        if (c === "\n") result += "\\n";
+        else if (c === "\r") result += "\\r";
+        else if (c === "\t") result += "\\t";
+        else result += " ";
+        continue;
+      }
+    }
+    result += c;
+  }
+  return result;
+}
+
+function tryCloseTruncatedJsonObject(text: string): string | null {
+  const stripped = stripMarkdownJsonFences(text);
+  const start = stripped.indexOf("{");
+  if (start === -1) return null;
+  let s = sanitizeJsonStringLiterals(stripped.slice(start));
+
+  s = s.replace(/,\s*"[^"]*":\s*"[^"]*$/s, "");
+  s = s.replace(/,\s*"[^"]*":\s*[\d.]+$/, "");
+  s = s.replace(/,\s*"[^"]*":\s*\[[^\]]*$/s, "");
+  s = s.replace(/,\s*"[^"]*$/s, "");
+  s = s.replace(/,\s*$/, "");
+
+  const stack: string[] = [];
+  let inString = false;
+  let escape = false;
+  for (const c of s) {
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (c === "\\" && inString) {
+      escape = true;
+      continue;
+    }
+    if (c === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (c === "{") stack.push("}");
+    else if (c === "[") stack.push("]");
+    else if (c === "}" || c === "]") stack.pop();
+  }
+  if (inString) s += '"';
+  while (stack.length > 0) s += stack.pop();
+
+  return s;
+}
+
+/** Парсит JSON из ответа LLM: markdown fence, обрыв на max_tokens, control chars. */
+export function tryParseLlmJsonObject(text: string): unknown | null {
+  if (!text?.trim()) return null;
+
+  const candidates = [
+    text.trim(),
+    stripMarkdownJsonFences(text),
+    extractFirstJsonObjectString(stripMarkdownJsonFences(text)),
+    tryCloseTruncatedJsonObject(text),
+  ].filter((c): c is string => typeof c === "string" && c.length > 0);
+
+  const seen = new Set<string>();
+  for (const raw of candidates) {
+    if (seen.has(raw)) continue;
+    seen.add(raw);
+    const variants = [raw, sanitizeJsonStringLiterals(raw)];
+    for (const candidate of variants) {
+      try {
+        return JSON.parse(candidate);
+      } catch {
+        // next variant
+      }
+    }
+  }
+  return null;
+}
+
+function getNoObjectGeneratedRawTexts(error: NoObjectGeneratedError): string[] {
+  const out: string[] = [];
+  if (typeof error.text === "string" && error.text.trim()) {
+    out.push(error.text);
+  }
   const e = error as unknown as {
     response?: {
       body?: {
@@ -148,22 +271,60 @@ function tryRecoverObjectFromReasoningChannel(
     };
   };
   const msg = e.response?.body?.choices?.[0]?.message;
-  const raw = msg?.reasoning ?? msg?.content;
-  if (typeof raw !== "string" || !raw.trim()) return null;
-  const tryParse = (text: string): unknown | null => {
-    try {
-      return JSON.parse(text);
-    } catch {
-      const slice = extractFirstJsonObjectString(text);
-      if (slice === null) return null;
-      try {
-        return JSON.parse(slice);
-      } catch {
-        return null;
-      }
-    }
+  for (const part of [msg?.content, msg?.reasoning]) {
+    if (typeof part === "string" && part.trim()) out.push(part);
+  }
+  return out;
+}
+
+function tryRecoverObjectFromNoObjectGeneratedError(
+  error: NoObjectGeneratedError,
+): unknown | null {
+  for (const raw of getNoObjectGeneratedRawTexts(error)) {
+    const parsed = tryParseLlmJsonObject(raw);
+    if (parsed !== null) return parsed;
+  }
+  return null;
+}
+
+/** Снимает обёртку SmartScrape `{ extractedData, shouldUseSmartscrape }`. */
+export function unwrapSmartScrapeExtract(raw: unknown): unknown {
+  if (
+    raw &&
+    typeof raw === "object" &&
+    !Array.isArray(raw) &&
+    "extractedData" in raw
+  ) {
+    return (raw as { extractedData: unknown }).extractedData;
+  }
+  return raw;
+}
+
+function schemaPropertyKeys(schema: unknown): string[] {
+  if (!schema || typeof schema !== "object") return [];
+  const s = schema as {
+    properties?: Record<string, unknown>;
   };
-  return tryParse(raw.trim());
+  const inner = s.properties?.extractedData as
+    | { properties?: Record<string, unknown> }
+    | undefined;
+  const props = inner?.properties ?? s.properties;
+  return props ? Object.keys(props) : [];
+}
+
+/** Поля схемы, которых нет в объекте (undefined). null считаем намеренным. */
+export function listMissingSchemaFields(
+  schema: unknown,
+  data: unknown,
+): string[] {
+  const keys = schemaPropertyKeys(schema);
+  if (!data || typeof data !== "object" || Array.isArray(data)) return keys;
+  const obj = data as Record<string, unknown>;
+  return keys.filter(k => obj[k] === undefined);
+}
+
+function openRouterMaxOutputTokens(modelId: string): number {
+  return Math.min(8192, getModelLimits(modelId).maxOutputTokens ?? 8192);
 }
 
 /** Модели через `createOpenAI({ name: "openrouter" })` имеют `provider` вида `openrouter.chat`. */
@@ -178,10 +339,8 @@ function isOpenRouterLanguageModel(model: unknown): boolean {
 }
 
 function openRouterSupportsStructuredOutputs(modelId: string): boolean {
-  // OpenRouter compatibility varies by provider. For qwen/qwen-turbo, OpenRouter can return:
-  // "No endpoints found that can handle the requested parameters" when `response_format: json_schema` is used.
-  const m = modelId.trim().toLowerCase();
-  if (m === "qwen/qwen-turbo") return false;
+  // cohere/command-r7b-12-2024 supports structured outputs via OpenRouter.
+  // Keep this hook for provider/model-specific incompatibilities if they appear.
   return true;
 }
 
@@ -375,6 +534,8 @@ export type GenerateCompletionsOptions = {
     deepResearchId?: string;
     llmsTxtId?: string;
   };
+  /** Исходная схема пользователя (до SmartScrape-обёртки) — для проверки полноты ответа. */
+  userSchema?: unknown;
 };
 export async function generateCompletions({
   logger,
@@ -388,6 +549,7 @@ export async function generateCompletions({
   retryModel = getModel("gpt-4.1"),
   costTrackingOptions,
   metadata,
+  userSchema,
 }: GenerateCompletionsOptions): Promise<{
   extract: any;
   numTokens: number;
@@ -667,26 +829,12 @@ export async function generateCompletions({
           error,
         });
 
-        if (typeof text === "string" && text.trim().startsWith("```")) {
-          if (text.trim().startsWith("```json")) {
-            text = text.trim().slice("```json".length).trim();
-          } else {
-            text = text.trim().slice("```".length).trim();
-          }
-
-          if (text.trim().endsWith("```")) {
-            text = text.trim().slice(0, -"```".length).trim();
-          }
-
-          // If this fixes the JSON, just return it. If not, continue - mogery
-          try {
-            JSON.parse(text);
-            logger.debug("Repaired text with string manipulation");
-            return text;
-          } catch (e) {
-            logger.error("Even after repairing, failed to parse JSON", {
-              error: e,
-            });
+        if (typeof text === "string") {
+          const parsed = tryParseLlmJsonObject(text);
+          if (parsed !== null) {
+            const repaired = JSON.stringify(parsed);
+            logger.debug("Repaired text with fence/control-char normalization");
+            return repaired;
           }
         }
 
@@ -782,9 +930,8 @@ export async function generateCompletions({
       prompt: prompt,
       ...(isOpenRouterLanguageModel(currentModel)
         ? {
-            // 1024 часто режет длинные JSON-объекты (finish_reason=length) → AI_JSONParseError/NoObjectGenerated.
-            // Для карточек ЦИАН с большим description/price_history нужен запас.
-            maxOutputTokens: 2048,
+            // 2048 режет длинные JSON (finish_reason=length) → обрыв + markdown fence.
+            maxOutputTokens: openRouterMaxOutputTokens(modelId),
             ...(modelId.startsWith("gpt-5")
               ? { temperature: 1 as const }
               : { temperature: 0.1 as const }),
@@ -814,7 +961,20 @@ export async function generateCompletions({
             }),
         },
       },
-      system: options.systemPrompt,
+      system: [
+        options.systemPrompt,
+        isOpenRouterLanguageModel(currentModel)
+          ? [
+              "Return valid JSON only (no markdown code fences).",
+              "Fill EVERY property from the schema; use null when the page has no value.",
+              "Order: short scalar fields first; put description and price_history last.",
+              'Keep "description" under 1200 characters (plain text, no markdown links).',
+              "price_history.date: copy as on page; server normalizes to YYYY-MM-DD.",
+            ].join(" ")
+          : undefined,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
       ...(schema && {
         schema: schema instanceof z.ZodType ? schema : jsonSchema(schema),
         schemaName: "extract",
@@ -955,89 +1115,45 @@ export async function generateCompletions({
         }
       } else if (NoObjectGeneratedError.isInstance(error)) {
         logger.warn("No object generated", { error });
-        if (
-          error.text &&
-          error.text.startsWith("```json") &&
-          error?.text.endsWith("```")
-        ) {
-          try {
-            extract = JSON.parse(
-              error.text.slice("```json".length, -"```".length).trim(),
-            );
-            result = {
-              object: extract,
-              usage: {
-                inputTokens: error.usage?.inputTokens ?? 0,
-                outputTokens: error.usage?.outputTokens ?? 0,
-                totalTokens: error.usage?.totalTokens ?? 0,
-              },
-            };
-            costTrackingOptions.costTracking.addCall({
-              type: "other",
-              metadata: {
-                ...costTrackingOptions.metadata,
-                gcDetails: "generateObject",
-                gcModel: generateObjectConfig.model.modelId,
-                recoveredFrom: "markdown_error_text",
-              },
-              tokens: {
-                input: result.usage?.inputTokens ?? 0,
-                output: result.usage?.outputTokens ?? 0,
-              },
-              model: modelId,
-              cost: calculateCost(
-                modelId,
-                result.usage?.inputTokens ?? 0,
-                result.usage?.outputTokens ?? 0,
-              ),
-            });
-          } catch (parseError) {
-            lastError = parseError as Error;
-            logger.error("Failed to parse JSON from error text", {
-              error: lastError.message,
-            });
-            throw lastError;
-          }
+        const recovered = tryRecoverObjectFromNoObjectGeneratedError(error);
+        if (recovered !== null) {
+          extract = recovered;
+          result = {
+            object: extract,
+            usage: {
+              inputTokens: error.usage?.inputTokens ?? 0,
+              outputTokens: error.usage?.outputTokens ?? 0,
+              totalTokens: error.usage?.totalTokens ?? 0,
+            },
+          };
+          costTrackingOptions.costTracking.addCall({
+            type: "other",
+            metadata: {
+              ...costTrackingOptions.metadata,
+              gcDetails: "generateObject",
+              gcModel: generateObjectConfig.model.modelId,
+              recoveredFrom: "no_object_generated_fallback",
+            },
+            tokens: {
+              input: result.usage?.inputTokens ?? 0,
+              output: result.usage?.outputTokens ?? 0,
+            },
+            model: modelId,
+            cost: calculateCost(
+              modelId,
+              result.usage?.inputTokens ?? 0,
+              result.usage?.outputTokens ?? 0,
+            ),
+          });
         } else {
-          const fromReasoning = tryRecoverObjectFromReasoningChannel(error);
-          if (fromReasoning !== null) {
-            result = {
-              object: fromReasoning,
-              usage: {
-                inputTokens: error.usage?.inputTokens ?? 0,
-                outputTokens: error.usage?.outputTokens ?? 0,
-                totalTokens: error.usage?.totalTokens ?? 0,
-              },
-            };
-            costTrackingOptions.costTracking.addCall({
-              type: "other",
-              metadata: {
-                ...costTrackingOptions.metadata,
-                gcDetails: "generateObject",
-                gcModel: generateObjectConfig.model.modelId,
-                recoveredFrom: "reasoning_channel",
-              },
-              tokens: {
-                input: result.usage?.inputTokens ?? 0,
-                output: result.usage?.outputTokens ?? 0,
-              },
-              model: modelId,
-              cost: calculateCost(
-                modelId,
-                result.usage?.inputTokens ?? 0,
-                result.usage?.outputTokens ?? 0,
-              ),
-            });
-          } else {
-            throw lastError;
-          }
+          throw lastError;
         }
       } else {
         throw lastError;
       }
     }
 
-    extract = result?.object;
+    extract = unwrapSmartScrapeExtract(result?.object);
 
     // If the users actually wants the items object, they can specify it as 'required' in the schema
     // otherwise, we just return the items array
@@ -1049,10 +1165,82 @@ export async function generateCompletions({
       extract = extract?.items;
     }
 
-    // Since generateObject doesn't provide token usage, we'll estimate it
     if (!result) {
       throw new Error("generateObject returned undefined result");
     }
+
+    const completenessSchema = userSchema ?? options.schema;
+    const isArrayExtract =
+      options.schema &&
+      options.schema.type === "array" &&
+      !schema?.required?.includes("items");
+
+    if (completenessSchema && !isArrayExtract) {
+      let missing = listMissingSchemaFields(completenessSchema, extract);
+      const maxOut = isOpenRouterLanguageModel(currentModel)
+        ? openRouterMaxOutputTokens(modelId)
+        : undefined;
+      const outputTokens = result.usage?.outputTokens ?? 0;
+      const likelyTruncated =
+        maxOut !== undefined && outputTokens >= Math.floor(maxOut * 0.9);
+
+      if (missing.length > 0 && (likelyTruncated || missing.length >= 5)) {
+        logger.warn("Incomplete LLM JSON extract, retrying once", {
+          missingCount: missing.length,
+          missingSample: missing.slice(0, 12),
+          outputTokens,
+          maxOut,
+        });
+        try {
+          const retryResult = await generateObject({
+            ...generateObjectConfig,
+            prompt:
+              prompt +
+              `\n\nIMPORTANT: The previous JSON was incomplete. Return ONE complete JSON object for the schema. Include these keys (null if absent on page): ${missing.join(", ")}. Keep "description" under 1200 characters; no markdown links in strings.`,
+            ...(maxOut !== undefined ? { maxOutputTokens: maxOut } : {}),
+          });
+          costTrackingOptions.costTracking.addCall({
+            type: "other",
+            metadata: {
+              ...costTrackingOptions.metadata,
+              gcDetails: "generateObject incomplete-retry",
+              gcModel: generateObjectConfig.model.modelId,
+            },
+            tokens: {
+              input: retryResult.usage?.inputTokens ?? 0,
+              output: retryResult.usage?.outputTokens ?? 0,
+            },
+            model: modelId,
+            cost: calculateCost(
+              modelId,
+              retryResult.usage?.inputTokens ?? 0,
+              retryResult.usage?.outputTokens ?? 0,
+            ),
+          });
+          const retryExtract = unwrapSmartScrapeExtract(retryResult.object);
+          const retryMissing = listMissingSchemaFields(
+            completenessSchema,
+            retryExtract,
+          );
+          if (retryMissing.length < missing.length) {
+            extract = retryExtract;
+            missing = retryMissing;
+            result = retryResult;
+          }
+        } catch (retryErr) {
+          logger.warn("Incomplete extract retry failed, keeping first pass", {
+            error:
+              retryErr instanceof Error ? retryErr.message : String(retryErr),
+          });
+        }
+      }
+
+      if (missing.length > 0) {
+        const partialNote = `LLM extract incomplete: missing ${missing.length} field(s) (${missing.slice(0, 8).join(", ")}${missing.length > 8 ? ", …" : ""}).`;
+        warning = warning ? `${warning} ${partialNote}` : partialNote;
+      }
+    }
+
     const promptTokens = result.usage?.inputTokens ?? 0;
     const completionTokens = result.usage?.outputTokens ?? 0;
 
@@ -1178,8 +1366,18 @@ export async function performLLMExtract(
     }
 
     // IMPORTANT: here it only get's the last page!!!
-    const extractedData =
+    let extractedData =
       extractedDataArray[extractedDataArray.length - 1] ?? undefined;
+
+    if (
+      extractedData &&
+      typeof extractedData === "object" &&
+      !Array.isArray(extractedData)
+    ) {
+      extractedData = normalizeCianListingExtract(
+        extractedData as Record<string, unknown>,
+      );
+    }
 
     // // Prepare the schema, potentially wrapping it
     // const { schemaToUse, schemaWasWrapped } = prepareSmartScrapeSchema(

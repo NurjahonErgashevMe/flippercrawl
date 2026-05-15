@@ -47,7 +47,7 @@ const configSchema = z.object({
   OPENROUTER_API_KEY: z.string().optional(),
   /** OpenAI-compatible API base (OpenRouter). AI SDK 6 требует v2 — используем @ai-sdk/openai + этот URL, не пакет @openrouter/ai-sdk-provider (v1). */
   OPENROUTER_BASE_URL: z.string().optional(),
-  /** Модель для OpenRouter (например `qwen/qwen-turbo`). */
+  /** Модель для OpenRouter (например `cohere/command-r7b-12-2024`). */
   OPENROUTER_MODEL_NAME: z.string().optional(),
   LLAMAPARSE_API_KEY: z.string().optional(),
   STRIPE_SECRET_KEY: z.string().optional(),
@@ -196,6 +196,15 @@ const configSchema = z.object({
     .min(5000)
     .max(180000)
     .default(45000),
+
+  /**
+   * Fetch через curl-impersonate (TLS/HTTP2 как Chrome). Только Linux/Darwin;
+   * на Windows автоматически используется undici.
+   */
+  USE_CURL_IMPERSONATE_FETCH: z.stringbool().optional().default(false),
+  CURL_IMPERSONATE_PRESET: z
+    .enum(["chrome-110", "chrome-116", "firefox-109", "firefox-117"])
+    .default("chrome-116"),
 
   /** Только эндпоинты scrape (и batch/status); остальные API — 404 */
   API_SCRAPE_ONLY: z.stringbool().optional().default(false),
