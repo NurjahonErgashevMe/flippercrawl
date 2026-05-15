@@ -1,5 +1,6 @@
 import {
   listMissingSchemaFields,
+  openRouterSupportsStructuredOutputs,
   removeDefaultProperty,
   sanitizeJsonStringLiterals,
   stripMarkdownJsonFences,
@@ -356,6 +357,20 @@ describe("LLM JSON recovery helpers", () => {
     };
     expect(parsed?.extractedData?.cian_id).toBe("1");
     expect(parsed?.extractedData?.price).toBe(100);
+  });
+});
+
+describe("openRouter structured outputs", () => {
+  it("disables strict json_schema for Cohere and gpt-oss models", () => {
+    expect(
+      openRouterSupportsStructuredOutputs("cohere/command-r7b-12-2024"),
+    ).toBe(false);
+    expect(openRouterSupportsStructuredOutputs("openai/gpt-oss-20b")).toBe(
+      false,
+    );
+    expect(openRouterSupportsStructuredOutputs("google/gemini-2.5-flash")).toBe(
+      true,
+    );
   });
 });
 

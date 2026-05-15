@@ -10,6 +10,7 @@ import { Meta } from "..";
 import { logger } from "../../../lib/logger";
 import { modelPrices } from "../../../lib/extract/usage/model-prices";
 import {
+  APICallError,
   AISDKError,
   generateObject,
   generateText,
@@ -338,10 +339,68 @@ function isOpenRouterLanguageModel(model: unknown): boolean {
   );
 }
 
-function openRouterSupportsStructuredOutputs(modelId: string): boolean {
-  // cohere/command-r7b-12-2024 supports structured outputs via OpenRouter.
-  // Keep this hook for provider/model-specific incompatibilities if they appear.
+export function openRouterSupportsStructuredOutputs(modelId: string): boolean {
+  const id = modelId.toLowerCase();
+  // Cohere на OpenRouter отдаёт 403 на strict json_schema для больших схем.
+  if (id.includes("cohere/") || id.startsWith("command-r")) return false;
+  // gpt-oss: JSON часто в reasoning; strict + большая схема ненадёжны — парсим content/reasoning вручную.
+  if (id.includes("gpt-oss")) return false;
   return true;
+}
+
+/** Убирает поля, которые пересчитывает бэкенд — меньше нагрузка на strict JSON schema. */
+function relaxSchemaForLlmExtract(schema: unknown): unknown {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+    return schema;
+  }
+  const s = schema as {
+    properties?: Record<string, { items?: { required?: string[] } }>;
+  };
+  const ph = s.properties?.price_history;
+  if (!ph?.items?.required) return schema;
+
+  const itemsRequired = ph.items.required.filter(
+    k => k !== "change_amount" && k !== "change_type",
+  );
+  return {
+    ...s,
+    properties: {
+      ...s.properties,
+      price_history: {
+        ...ph,
+        items: {
+          ...ph.items,
+          required: itemsRequired,
+        },
+      },
+    },
+  };
+}
+
+function isOpenRouterProvider403(error: unknown): boolean {
+  if (!APICallError.isInstance(error)) return false;
+  return error.statusCode === 403;
+}
+
+function withoutOpenRouterStructuredOutputs<T extends Record<string, unknown>>(
+  config: T,
+): T {
+  const providerOptions = (config.providerOptions ?? {}) as Record<
+    string,
+    unknown
+  >;
+  const openai = (providerOptions.openai ?? {}) as Record<string, unknown>;
+  return {
+    ...config,
+    providerOptions: {
+      ...providerOptions,
+      openai: {
+        ...openai,
+        strictJsonSchema: false,
+        structuredOutputs: false,
+      },
+    },
+  };
 }
 
 function normalizeSchema(x: any): any {
@@ -818,7 +877,12 @@ export async function generateCompletions({
       }
 
       schema = normalizeSchema(schema);
+      schema = relaxSchemaForLlmExtract(schema);
     }
+
+    const useOpenRouterStructuredOutputs =
+      isOpenRouterLanguageModel(currentModel) &&
+      openRouterSupportsStructuredOutputs(modelId);
 
     const repairConfig = {
       experimental_repairText: async ({ text, error }) => {
@@ -954,11 +1018,10 @@ export async function generateCompletions({
           },
         },
         openai: {
-          strictJsonSchema: true,
-          ...(isOpenRouterLanguageModel(currentModel) &&
-            openRouterSupportsStructuredOutputs(modelId) && {
-              structuredOutputs: true,
-            }),
+          strictJsonSchema: useOpenRouterStructuredOutputs,
+          ...(useOpenRouterStructuredOutputs && {
+            structuredOutputs: true,
+          }),
         },
       },
       system: [
@@ -1068,7 +1131,38 @@ export async function generateCompletions({
       });
     } catch (error) {
       lastError = error as Error;
-      if (
+      if (isOpenRouterProvider403(error) && useOpenRouterStructuredOutputs) {
+        logger.warn(
+          "OpenRouter provider 403 with structured outputs — retrying without strict json_schema",
+          { model: modelId },
+        );
+        try {
+          const relaxedConfig =
+            withoutOpenRouterStructuredOutputs(generateObjectConfig);
+          result = await generateObject(relaxedConfig);
+          costTrackingOptions.costTracking.addCall({
+            type: "other",
+            metadata: {
+              ...costTrackingOptions.metadata,
+              gcDetails: "generateObject openrouter-403-relaxed",
+              gcModel: relaxedConfig.model.modelId,
+            },
+            tokens: {
+              input: result.usage?.inputTokens ?? 0,
+              output: result.usage?.outputTokens ?? 0,
+            },
+            model: modelId,
+            cost: calculateCost(
+              modelId,
+              result.usage?.inputTokens ?? 0,
+              result.usage?.outputTokens ?? 0,
+            ),
+          });
+        } catch (relaxedError) {
+          lastError = relaxedError as Error;
+          throw lastError;
+        }
+      } else if (
         error.message?.includes("Quota exceeded") ||
         error.message?.includes("You exceeded your current quota") ||
         error.message?.includes("rate limit")

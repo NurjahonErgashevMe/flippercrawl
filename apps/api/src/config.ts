@@ -47,8 +47,13 @@ const configSchema = z.object({
   OPENROUTER_API_KEY: z.string().optional(),
   /** OpenAI-compatible API base (OpenRouter). AI SDK 6 требует v2 — используем @ai-sdk/openai + этот URL, не пакет @openrouter/ai-sdk-provider (v1). */
   OPENROUTER_BASE_URL: z.string().optional(),
-  /** Модель для OpenRouter (например `cohere/command-r7b-12-2024`). */
+  /** Модель для OpenRouter (например `openai/gpt-oss-20b`). */
   OPENROUTER_MODEL_NAME: z.string().optional(),
+  /** Порядок провайдеров OpenRouter (через запятую), напр. `deepinfra`. */
+  OPENROUTER_PROVIDER_ORDER: z.string().optional().default("deepinfra"),
+  /** Квантизация OpenRouter (через запятую), напр. `bf16`. */
+  OPENROUTER_PROVIDER_QUANTIZATIONS: z.string().optional().default("bf16"),
+  OPENROUTER_PROVIDER_ALLOW_FALLBACKS: z.stringbool().optional().default(true),
   LLAMAPARSE_API_KEY: z.string().optional(),
   STRIPE_SECRET_KEY: z.string().optional(),
   AUTUMN_SECRET_KEY: z.string().optional(),

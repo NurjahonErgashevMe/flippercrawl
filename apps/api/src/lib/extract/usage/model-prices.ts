@@ -19803,6 +19803,18 @@ export const modelPrices = {
     supports_tool_choice: true,
     source: "https://openrouter.ai/openai/gpt-oss-20b",
   },
+  "openai/gpt-oss-20b": {
+    max_tokens: 32768,
+    max_input_tokens: 131072,
+    max_output_tokens: 32768,
+    input_cost_per_token: 1.8e-7,
+    output_cost_per_token: 8e-7,
+    litellm_provider: "openrouter",
+    mode: "chat",
+    supports_function_calling: true,
+    supports_response_schema: true,
+    supports_tool_choice: true,
+  },
   "openrouter/openai/gpt-oss-120b": {
     max_tokens: 32768,
     max_input_tokens: 131072,

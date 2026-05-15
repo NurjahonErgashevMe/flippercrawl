@@ -3,10 +3,50 @@
  * @ai-sdk/openai его не передаёт — добавляем через обёртку fetch.
  * @see docs/PROVIDER_ROUTING.md
  */
-export const OPENROUTER_DEFAULT_PROVIDER = {
-  order: ["cohere"] as const,
-  allow_fallbacks: true,
-} as const;
+import { config } from "../config";
+
+function parseCsvList(value: string | undefined): string[] | undefined {
+  const items = value
+    ?.split(",")
+    .map(s => s.trim())
+    .filter(Boolean);
+  return items && items.length > 0 ? items : undefined;
+}
+
+export function buildOpenRouterProviderPreferences(): {
+  order?: string[];
+  quantizations?: string[];
+  allow_fallbacks: boolean;
+} {
+  const order = parseCsvList(config.OPENROUTER_PROVIDER_ORDER);
+  const quantizations = parseCsvList(config.OPENROUTER_PROVIDER_QUANTIZATIONS);
+  return {
+    ...(order ? { order } : {}),
+    ...(quantizations ? { quantizations } : {}),
+    allow_fallbacks: config.OPENROUTER_PROVIDER_ALLOW_FALLBACKS !== false,
+  };
+}
+
+/**
+ * gpt-oss на DeepInfra: reasoning обязателен (`effort: "none"` → 400).
+ * Cohere/Gemini: ответ в `content`, reasoning отключаем.
+ */
+export function openRouterReasoningPolicyForModel(model: string | undefined): {
+  effort: string;
+} {
+  const id = (model ?? "").toLowerCase();
+  if (id.includes("gpt-oss")) {
+    return { effort: "low" };
+  }
+  return { effort: "none" };
+}
+
+function applyOpenRouterRequestPolicy(body: Record<string, unknown>): void {
+  body.provider = buildOpenRouterProviderPreferences();
+  const model = typeof body.model === "string" ? body.model : undefined;
+  body.reasoning = openRouterReasoningPolicyForModel(model);
+  delete body.reasoning_effort;
+}
 
 export function withOpenRouterProviderRouting(
   innerFetch: typeof globalThis.fetch,
@@ -28,10 +68,7 @@ export function withOpenRouterProviderRouting(
     }
     try {
       const body = JSON.parse(init.body) as Record<string, unknown>;
-      body.provider = { ...OPENROUTER_DEFAULT_PROVIDER };
-      /** OpenRouter: отключить reasoning/thinking, ответ в `content`, не в `reasoning`. @see docs reasoning-tokens */
-      body.reasoning = { effort: "none" };
-      delete body.reasoning_effort;
+      applyOpenRouterRequestPolicy(body);
       return innerFetch(input, {
         ...init,
         body: JSON.stringify(body),
