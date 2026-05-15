@@ -1,27 +1,23 @@
 import { CurlImpersonate } from "node-curl-impersonate";
 import { config } from "../../../../config";
 
-export type CurlImpersonatePreset =
+type CurlImpersonatePreset =
   | "chrome-110"
   | "chrome-116"
   | "firefox-109"
   | "firefox-117";
 
-export type CurlFetchResult = {
+type CurlFetchResult = {
   status: number;
   body: string;
   url: string;
   headers: [string, string][];
 };
 
-export function isCurlImpersonatePlatformSupported(): boolean {
-  return process.platform === "linux" || process.platform === "darwin";
-}
-
 export function shouldUseCurlImpersonateFetch(): boolean {
   return (
     config.USE_CURL_IMPERSONATE_FETCH === true &&
-    isCurlImpersonatePlatformSupported()
+    (process.platform === "linux" || process.platform === "darwin")
   );
 }
 

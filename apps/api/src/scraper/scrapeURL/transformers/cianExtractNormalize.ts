@@ -1,5 +1,5 @@
 /** Одна строка истории цены (как в JSON-extract Cian). */
-export type PriceHistoryEntry = {
+type PriceHistoryEntry = {
   date?: string;
   price?: number;
   change_amount?: number;
