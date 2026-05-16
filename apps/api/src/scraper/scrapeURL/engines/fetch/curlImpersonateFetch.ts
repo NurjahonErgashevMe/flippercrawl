@@ -1,7 +1,7 @@
 import { CurlImpersonate } from "node-curl-impersonate";
 import { config } from "../../../../config";
 
-type CurlImpersonatePreset =
+export type CurlImpersonatePreset =
   | "chrome-110"
   | "chrome-116"
   | "firefox-109"
@@ -44,9 +44,16 @@ export async function fetchWithCurlImpersonate(
     "--show-error",
     "--max-time",
     String(maxTime),
-    // Preset sets en-US; override for RU sites like Cian.
-    `-H ${shellQuote("Accept-Language: ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7")}`,
   ];
+  // Preset sets en-US by default; override only if caller didn't pass one.
+  const callerLanguage = Object.entries(headers).find(
+    ([k]) => k.toLowerCase() === "accept-language",
+  );
+  if (!callerLanguage) {
+    flags.push(
+      `-H ${shellQuote("Accept-Language: ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7")}`,
+    );
+  }
   if (opts.proxyUrl) {
     flags.push("-x", shellQuote(opts.proxyUrl));
   }

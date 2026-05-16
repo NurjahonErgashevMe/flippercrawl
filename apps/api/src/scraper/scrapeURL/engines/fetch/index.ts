@@ -26,6 +26,7 @@ import {
   looksLikeAntiBotPage,
   withDefaultBrowserHeaders,
 } from "./browserHeaders";
+import { browserProfileForPoolIndex } from "./browserProfiles";
 import {
   fetchWithCurlImpersonate,
   shouldUseCurlImpersonateFetch,
@@ -66,13 +67,24 @@ async function fetchPageWithCurlOrUndici(
   pageUrl: string,
   requestHeaders: Record<string, string>,
 ): Promise<PageFetchResult> {
+  const profile = browserProfileForPoolIndex(poolIdx);
+  const headersWithProfile: Record<string, string> = {
+    ...profile.headers,
+    ...requestHeaders,
+  };
+
   if (shouldUseCurlImpersonateFetch()) {
     try {
       const proxyUrl = buildProxyUrlForPoolIndex(poolIdx);
-      const curlRes = await fetchWithCurlImpersonate(pageUrl, requestHeaders, {
-        proxyUrl,
-        timeoutMs: config.SCRAPE_FETCH_CONNECT_TIMEOUT_MS,
-      });
+      const curlRes = await fetchWithCurlImpersonate(
+        pageUrl,
+        headersWithProfile,
+        {
+          proxyUrl,
+          preset: profile.preset,
+          timeoutMs: config.SCRAPE_FETCH_CONNECT_TIMEOUT_MS,
+        },
+      );
       return {
         status: curlRes.status,
         text: decodeHtmlBody(Buffer.from(curlRes.body, "utf8"), meta),
@@ -97,7 +109,7 @@ async function fetchPageWithCurlOrUndici(
       undici.fetch(pageUrl, {
         dispatcher: getSecureDispatcher(meta.options.skipTlsVerification),
         redirect: "follow",
-        headers: requestHeaders,
+        headers: headersWithProfile,
         signal: meta.abort.asSignal(),
       }),
     ),
